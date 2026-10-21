@@ -129,6 +129,19 @@ CREATE TABLE IF NOT EXISTS malicious_packages (
   found_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS alerts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  repo_id UUID REFERENCES repositories(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,
+  event_type TEXT,
+  finding_id TEXT,
+  status TEXT NOT NULL,
+  summary TEXT,
+  error TEXT,
+  ticket_key TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS api_keys (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,

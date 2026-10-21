@@ -273,10 +273,13 @@ export function CicdPage() {
 export function AlertsPage() {
   const [repos, setRepos] = useState([]);
   const [repoId, setRepoId] = useState('');
-  const [channels, setChannels] = useState({ slackWebhookUrl: '', pagerDutyRoutingKey: '', email: { smtp: { host: '', port: 587, auth: { user: '', pass: '' } }, to: '' } });
+  const [channels, setChannels] = useState({ slackWebhookUrl: '', pagerDutyRoutingKey: '', email: { to: '' } });
+  const [channelStatus, setChannelStatus] = useState({ slack: false, pagerduty: false, email: false });
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [history, setHistory] = useState([]);
   const [err, setErr] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -291,57 +294,128 @@ export function AlertsPage() {
       .catch(() => []);
   }, []);
 
+  async function loadRepoAlerts(id) {
+    if (!id) return;
+    try {
+      const [res, histRes] = await Promise.all([
+        api.getAlertChannels(id).catch(() => null),
+        api.getAlertHistory(id).catch(() => ({ history: [] })),
+      ]);
+
+      if (res) {
+        setChannelStatus({
+          slack: Boolean(res.slackWebhookUrl),
+          pagerduty: Boolean(res.pagerDutyRoutingKey),
+          email: Boolean(res.email?.to),
+        });
+        setSmtpConfigured(Boolean(res.smtpConfigured));
+        setChannels({
+          slackWebhookUrl: res.slackWebhookUrl ? '••••configured••••' : '',
+          pagerDutyRoutingKey: res.pagerDutyRoutingKey ? '••••configured••••' : '',
+          email: { to: res.email?.to || '' },
+        });
+      }
+      setHistory(histRes?.history || []);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
   useEffect(() => {
-    if (!repoId) return;
-    api.getAlertChannels(repoId)
-      .then(res => {
-        if (res) {
-          setChannels(c => ({
-            ...c,
-            slackWebhookUrl: res.slackWebhookUrl || '',
-            pagerDutyRoutingKey: res.pagerDutyRoutingKey || '',
-            email: { ...c.email, to: res.email?.to || '' }
-          }));
-        }
-      })
-      .catch(() => { });
+    if (repoId) {
+      loadRepoAlerts(repoId);
+    }
   }, [repoId]);
 
   async function save() {
     if (!repoId) return;
-    setSaving(true); setErr('');
+    setSaving(true);
+    setErr('');
     try {
-      await api.setAlertChannels(repoId, { slackWebhookUrl: channels.slackWebhookUrl || undefined, pagerDutyRoutingKey: channels.pagerDutyRoutingKey || undefined, email: channels.email?.to ? channels.email : undefined });
-      setSaved(true); setTimeout(() => setSaved(false), 2000);
-    } catch (e) { setErr(e.message); }
-    finally { setSaving(false); }
+      const payload = {
+        slackWebhookUrl: channels.slackWebhookUrl,
+        pagerDutyRoutingKey: channels.pagerDutyRoutingKey,
+        email: channels.email?.to ? channels.email.to : null,
+      };
+      await api.setAlertChannels(repoId, payload);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+      await loadRepoAlerts(repoId);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearChannel(channelKey) {
+    if (!repoId) return;
+    setSaving(true);
+    setErr('');
+    try {
+      const payload = {
+        [channelKey]: null,
+      };
+      await api.setAlertChannels(repoId, payload);
+      await loadRepoAlerts(repoId);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function test() {
     if (!repoId) return;
-    setTesting(true); setErr(''); setTestResult(null);
+    setTesting(true);
+    setErr('');
+    setTestResult(null);
     try {
       const r = await api.testAlertChannels(repoId);
       setTestResult(r.results);
-    } catch (e) { setErr(e.message); }
-    finally { setTesting(false); }
+      if (r.smtpConfigured !== undefined) setSmtpConfigured(r.smtpConfigured);
+      // Reload history to show the test event
+      const histRes = await api.getAlertHistory(repoId).catch(() => ({ history: [] }));
+      setHistory(histRes?.history || []);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setTesting(false);
+    }
   }
 
   return (
     <div className="space-y-6 w-full">
-      <div>
-        <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">Alert Channels</h1>
-        <p className="text-slate-500 text-sm mt-1">P0 findings auto-create Jira tickets and fire PagerDuty. All findings above threshold notify Slack.</p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">Alert Channels</h1>
+          <p className="text-slate-500 text-sm mt-1">
+            P0 critical vulnerabilities automatically trigger Jira & PagerDuty. High findings and policy violations notify Slack & Email.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {smtpConfigured ? (
+            <span className="text-xs font-mono px-2.5 py-1 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold shadow-xs">
+              ✓ Server SMTP Active
+            </span>
+          ) : (
+            <span className="text-xs font-mono px-2.5 py-1 rounded-full border border-amber-300 bg-amber-50 text-amber-800 font-semibold shadow-xs">
+              ⚠ Server SMTP Not Configured
+            </span>
+          )}
+        </div>
       </div>
+
       <ErrorBanner message={err} />
 
-      <Card className="p-5 space-y-4 bg-white border border-slate-200 shadow-xs">
+      {/* Configuration Card */}
+      <Card className="p-5 space-y-5 bg-white border border-slate-200 shadow-xs">
         <div>
-          <label className="text-xs font-mono font-medium text-slate-600">Select Repository</label>
+          <label className="text-xs font-mono font-medium text-slate-600">Select Target Repository</label>
           <select
             value={repoId}
             onChange={e => setRepoId(e.target.value)}
-            className="w-full mt-1 bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 font-mono cursor-pointer shadow-xs"
+            className="w-full mt-1.5 bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 font-mono cursor-pointer shadow-xs"
           >
             <option value="">Select repository…</option>
             {repos.map(r => (
@@ -350,60 +424,210 @@ export function AlertsPage() {
           </select>
         </div>
 
-        {[
-          { label: 'Slack Webhook URL', field: 'slackWebhookUrl', placeholder: 'https://hooks.slack.com/services/…' },
-          { label: 'PagerDuty Routing Key', field: 'pagerDutyRoutingKey', placeholder: 'Events API v2 routing key' },
-        ].map(({ label, field, placeholder }) => (
-          <div key={field}>
-            <label className="text-xs font-mono font-medium text-slate-600">{label}</label>
-            <input
-              type="password"
-              value={channels[field] || ''}
-              onChange={e => setChannels(c => ({ ...c, [field]: e.target.value }))}
-              placeholder={placeholder}
-              className="w-full mt-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 shadow-xs"
-            />
+        {/* Slack Webhook */}
+        <div className="pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-mono font-medium text-slate-700">Slack Incoming Webhook URL</label>
+              {channelStatus.slack ? (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                  Configured
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                  Not set
+                </span>
+              )}
+            </div>
+            {channelStatus.slack && (
+              <button
+                type="button"
+                onClick={() => clearChannel('slackWebhookUrl')}
+                className="text-xs text-rose-600 hover:text-rose-800 underline font-mono"
+              >
+                Clear
+              </button>
+            )}
           </div>
-        ))}
-
-        <div>
-          <label className="text-xs font-mono font-medium text-slate-600">Alert email address</label>
           <input
-            value={channels.email?.to || ''}
-            onChange={e => setChannels(c => ({ ...c, email: { ...c.email, to: e.target.value } }))}
-            placeholder="security-team@yourcompany.com"
-            className="w-full mt-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 shadow-xs"
+            type="password"
+            value={channels.slackWebhookUrl || ''}
+            onChange={e => setChannels(c => ({ ...c, slackWebhookUrl: e.target.value }))}
+            placeholder={channelStatus.slack ? '••••configured•••• (enter new URL to update)' : 'https://hooks.slack.com/services/T.../B.../...'}
+            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 shadow-xs font-mono"
           />
+          <p className="text-[11px] text-slate-400 mt-1">Must strictly begin with <code className="font-mono bg-slate-50 px-1 border rounded">https://hooks.slack.com/services/</code></p>
         </div>
 
-        <div className="flex gap-3 pt-2">
-          <Button onClick={save} loading={saving} disabled={!repoId}>{saved ? '✓ Saved' : 'Save channels'}</Button>
-          <Button variant="ghost" onClick={test} loading={testing} disabled={!repoId}>Send test alert</Button>
+        {/* PagerDuty Routing Key */}
+        <div className="pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-mono font-medium text-slate-700">PagerDuty Events API v2 Routing Key</label>
+              {channelStatus.pagerduty ? (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                  Configured
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                  Not set
+                </span>
+              )}
+            </div>
+            {channelStatus.pagerduty && (
+              <button
+                type="button"
+                onClick={() => clearChannel('pagerDutyRoutingKey')}
+                className="text-xs text-rose-600 hover:text-rose-800 underline font-mono"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <input
+            type="password"
+            value={channels.pagerDutyRoutingKey || ''}
+            onChange={e => setChannels(c => ({ ...c, pagerDutyRoutingKey: e.target.value }))}
+            placeholder={channelStatus.pagerduty ? '••••configured•••• (enter new key to update)' : '32-character integration routing key'}
+            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 shadow-xs font-mono"
+          />
+          <p className="text-[11px] text-slate-400 mt-1">Used exclusively for triggering P0 critical supply-chain incidents.</p>
+        </div>
+
+        {/* Email */}
+        <div className="pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-mono font-medium text-slate-700">Alert Email Address</label>
+              {channelStatus.email ? (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                  Configured
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                  Not set
+                </span>
+              )}
+            </div>
+            {channelStatus.email && (
+              <button
+                type="button"
+                onClick={() => clearChannel('email')}
+                className="text-xs text-rose-600 hover:text-rose-800 underline font-mono"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <input
+            type="email"
+            value={channels.email?.to || ''}
+            onChange={e => setChannels(c => ({ ...c, email: { to: e.target.value } }))}
+            placeholder="security-team@yourcompany.com"
+            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 shadow-xs"
+          />
+          {!smtpConfigured && (
+            <p className="text-[11px] text-amber-700 mt-1 font-mono">
+              Note: Email delivery requires backend SMTP configuration (<code className="bg-amber-100 px-1 rounded">SMTP_HOST</code>, <code className="bg-amber-100 px-1 rounded">SMTP_USER</code>, <code className="bg-amber-100 px-1 rounded">SMTP_PASS</code> in .env).
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 pt-3">
+          <Button onClick={save} loading={saving} disabled={!repoId}>
+            {saved ? '✓ Channels Saved' : 'Save channels'}
+          </Button>
+          <Button variant="ghost" onClick={test} loading={testing} disabled={!repoId}>
+            {testing ? 'Sending test…' : 'Send test alert'}
+          </Button>
         </div>
       </Card>
 
+      {/* Test Results Display */}
       {testResult && (
         <Card className="p-5 bg-white border border-slate-200 shadow-xs">
-          <SectionLabel>Test results</SectionLabel>
-          <div className="mt-3 space-y-2">
+          <SectionLabel>Live Test Dispatch Results</SectionLabel>
+          <p className="text-xs text-slate-500 mt-1 mb-3">
+            Real external verification results. Credentials and secrets are kept server-side.
+          </p>
+          <div className="space-y-2.5 divide-y divide-slate-100">
             {Object.entries(testResult).map(([ch, r]) => (
-              <div key={ch} className="flex items-center gap-3 text-sm">
-                <span className="font-mono text-slate-600 font-semibold w-20 shrink-0">{ch}</span>
-                {r.sent ? (
-                  <Badge variant="safe">✓ Sent {r.ticketKey ? `— ${r.ticketKey}` : ''}</Badge>
-                ) : r.skipped ? (
-                  <Badge variant="default">skipped — {r.reason}</Badge>
-                ) : (
-                  <Badge variant="critical">✗ {r.error}</Badge>
-                )}
+              <div key={ch} className="pt-2 flex flex-wrap items-center justify-between gap-3 text-sm">
+                <span className="font-mono text-slate-800 font-bold w-24 capitalize">{ch}</span>
+                <div className="flex-1">
+                  {r.sent ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-md">
+                      ✓ Successfully Delivered {r.ticketKey ? `(Ticket: ${r.ticketKey})` : ''} {r.to ? `to ${r.to}` : ''}
+                    </span>
+                  ) : r.skipped ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-600 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
+                      ⊙ Skipped: {r.reason}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-mono font-bold text-rose-800 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md">
+                      ✗ Delivery Failed: {r.error}
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         </Card>
       )}
+
+      {/* Alert History Section */}
+      <Card className="p-5 bg-white border border-slate-200 shadow-xs">
+        <SectionLabel>Recent Alert Delivery History</SectionLabel>
+        <p className="text-xs text-slate-500 mt-1 mb-4">
+          Audit log of alerts dispatched for this repository across CI/CD scans and manual analyses.
+        </p>
+
+        {history.length === 0 ? (
+          <EmptyState
+            icon="◎"
+            title="No alert events recorded yet"
+            body="Alerts dispatched during security scans or test notifications will be recorded here."
+          />
+        ) : (
+          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+            {history.map((item) => (
+              <div key={item.id} className="py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-3 min-w-[200px]">
+                  <span className="font-mono text-slate-400">
+                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                  <span className="font-mono font-bold text-slate-800 uppercase px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px]">
+                    {item.channel}
+                  </span>
+                  <span className="font-mono text-slate-700 font-semibold">{item.findingId}</span>
+                </div>
+                <div className="flex-1 min-w-[200px] text-slate-600 truncate">
+                  {item.summary}
+                </div>
+                <div>
+                  {item.status === 'sent' ? (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold">
+                      ✓ Sent
+                    </span>
+                  ) : item.status === 'skipped' ? (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-200">
+                      ⊙ Skipped
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-50 text-rose-800 border border-rose-200 font-bold">
+                      ✗ Failed
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
+
 
 // ── Compliance ─────────────────────────────────────────────────────────────
 export function CompliancePage() {

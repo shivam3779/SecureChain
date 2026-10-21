@@ -93,6 +93,7 @@ export const api = {
   getAlertChannels: (repoId) => request(`/api/repos/${repoId}/alert-channels`),
   setAlertChannels: (repoId, channels) => request(`/api/repos/${repoId}/alert-channels`, { method: 'PUT', body: channels }),
   testAlertChannels: (repoId) => request(`/api/repos/${repoId}/alert-channels/test`, { method: 'POST' }),
+  getAlertHistory: (repoId) => request(`/api/repos/${repoId}/alert-history`),
 
   // AI Threat Engine
   aiExplain: (finding) => request('/api/ai/explain', { method: 'POST', body: { finding } }),

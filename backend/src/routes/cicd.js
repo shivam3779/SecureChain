@@ -95,13 +95,11 @@ router.post('/sbom-submit', express.json({ limit: '5mb' }), authenticateApiKey, 
     repo.lastScanId = scanJob.id;
     await db.write();
 
-    // Notify on anything that triggered a non-PASS verdict, plus all P0s regardless
-    const channels = repo.alertChannels || {};
-    const notifyTargets = [
-      ...vulnerabilities.filter((v) => v.priorityLabel === 'P0_CRITICAL'),
-      ...(gate.verdict !== 'PASS' ? maliciousPackages : []),
-    ];
-    const notifyResults = await Promise.all(notifyTargets.map((f) => notifications.dispatchAlert(channels, f)));
+    // Notify on anything that triggered a non-PASS verdict, plus all P0s regardless (deduplicated)
+    const notifyResults = await notifications.dispatchScanAlerts(repo, vulnerabilities, maliciousPackages, scanJob).catch((e) => {
+      console.warn('[cicd] Alert dispatch failed:', e.message);
+      return [];
+    });
 
     res.json({
       verdict: gate.verdict, // PASS | FAILED | BLOCKED  <-- CI step exits non-zero unless this is PASS

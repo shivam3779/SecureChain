@@ -9,7 +9,8 @@ const vulnEngine = require('../modules/vulnerabilityEngine');
 const malwareAnalyzer = require('../modules/maliciousPackageAnalyzer');
 const buildIntegrity = require('../modules/buildIntegrity');
 const policyGate = require('../modules/policyGate');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, isRepoAuthorized, getAllowedRepoIds } = require('../middleware/auth');
+const notifications = require('../modules/notificationService');
 const { db, uuid, saveUser } = require('../db/store');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -303,47 +304,6 @@ router.get('/auth/me', requireAuth, async (req, res) => {
 
 // ---------- Repositories ----------
 
-function isRepoAuthorized(repo, user, db) {
-  if (!repo || !user) return false;
-  if (user.role === 'Admin') return true;
-  if (repo.ownerId === user.sub) return true;
-  const currentUser = db.data.users?.find(
-    (u) => String(u.githubId) === user.sub || u.googleId === user.sub || u.id === user.sub
-  );
-  if (currentUser?.orgId) {
-    const ownerUser = db.data.users?.find(
-      (u) => String(u.githubId) === repo.ownerId || u.googleId === repo.ownerId || u.id === repo.ownerId
-    );
-    if (ownerUser && ownerUser.orgId === currentUser.orgId) return true;
-  }
-  return false;
-}
-
-function getAllowedRepoIds(user, db) {
-  if (!user) return new Set();
-  if (user.role === 'Admin') {
-    return new Set((db.data.repositories || []).map((r) => r.id));
-  }
-  const currentUser = db.data.users?.find(
-    (u) => String(u.githubId) === user.sub || u.googleId === user.sub || u.id === user.sub
-  );
-  const allowedOwnerIds = new Set([user.sub]);
-  if (currentUser?.orgId) {
-    (db.data.users || [])
-      .filter((u) => u.orgId === currentUser.orgId)
-      .forEach((u) => {
-        if (u.id) allowedOwnerIds.add(u.id);
-        if (u.githubId) allowedOwnerIds.add(String(u.githubId));
-        if (u.googleId) allowedOwnerIds.add(u.googleId);
-      });
-  }
-  return new Set(
-    (db.data.repositories || [])
-      .filter((r) => allowedOwnerIds.has(r.ownerId))
-      .map((r) => r.id)
-  );
-}
-
 // Connected repos (stored in SecureChain DB — survives across sessions)
 router.get('/repos/connected', requireAuth, async (req, res) => {
   await db.read();
@@ -617,6 +577,11 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
     computeHarmnessAndRank(vulnFindings, malwareFindings, tree.components);
     repo.riskScore = computeRiskScore(vulnFindings, malwareFindings, tree.components);
     await db.write();
+
+    // Trigger non-blocking scan alerts for qualifying findings
+    notifications.dispatchScanAlerts(repo, vulnFindings, malwareFindings, scanJob).catch((e) => {
+      console.warn('[scan] Failed to dispatch scan alerts:', e.message);
+    });
 
     res.json({
       scanJob,

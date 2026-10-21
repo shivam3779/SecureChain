@@ -1,80 +1,216 @@
+/**
+ * Alert Channels Route Handler
+ * ─────────────────────────────────────────────────────────────────
+ * Configures and tests per-repository notification channels (Slack, PagerDuty, Jira, Email).
+ * Enforces tenant authorization (anti-IDOR), SSRF validation on webhooks, rate limiting,
+ * secret redaction, and alert history logging.
+ */
+
+'use strict';
+
 const express = require('express');
 const router = express.Router();
 
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, isRepoAuthorized } = require('../middleware/auth');
 const { db } = require('../db/store');
 const notifications = require('../modules/notificationService');
 
-/**
- * Alert channel configuration per repository (report 3.2.5: "Configured
- * notification targets — Slack, Jira, PagerDuty, email"). Stored on the
- * repository record (mirrors the `alert_channels` table in the report's
- * schema, section 3.5).
- */
+// In-memory rate limiting map: repoId -> [timestamps in ms]
+const testRateLimits = new Map();
 
+function checkTestRateLimit(repoId) {
+  const now = Date.now();
+  const windowMs = 60000; // 1 minute
+  const maxAttempts = 5;
+
+  const timestamps = (testRateLimits.get(repoId) || []).filter((t) => now - t < windowMs);
+  if (timestamps.length >= maxAttempts) {
+    return false;
+  }
+  timestamps.push(now);
+  testRateLimits.set(repoId, timestamps);
+  return true;
+}
+
+/**
+ * GET /api/repos/:id/alert-channels
+ * Retrieves configured channels for the repo with secrets redacted.
+ */
 router.get('/repos/:id/alert-channels', requireAuth, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo) return res.status(404).json({ error: 'Repository not found' });
-  res.json(redact(repo.alertChannels || {}));
-});
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
 
-router.put('/repos/:id/alert-channels', requireAuth, async (req, res) => {
-  await db.read();
-  const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo) return res.status(404).json({ error: 'Repository not found' });
-
-  const { slackWebhookUrl, jira, pagerDutyRoutingKey, pagerDutyEndpointOverride, email } = req.body;
-  repo.alertChannels = {
-    ...(slackWebhookUrl !== undefined ? { slackWebhookUrl } : { slackWebhookUrl: repo.alertChannels?.slackWebhookUrl }),
-    ...(jira !== undefined ? { jira } : { jira: repo.alertChannels?.jira }),
-    ...(pagerDutyRoutingKey !== undefined ? { pagerDutyRoutingKey } : { pagerDutyRoutingKey: repo.alertChannels?.pagerDutyRoutingKey }),
-    ...(pagerDutyEndpointOverride !== undefined ? { pagerDutyEndpointOverride } : { pagerDutyEndpointOverride: repo.alertChannels?.pagerDutyEndpointOverride }),
-    ...(email !== undefined ? { email } : { email: repo.alertChannels?.email }),
-  };
-  await db.write();
-  res.json(redact(repo.alertChannels));
+  res.json({
+    ...redact(repo.alertChannels || {}),
+    smtpConfigured: notifications.isSmtpConfigured(),
+  });
 });
 
 /**
- * Sends a synthetic P0 finding through every configured channel and reports
- * exactly what each dispatcher did — this is the "Test notification" button
- * a dashboard would wire up. Real HTTP calls, real failure modes, nothing
- * mocked: if Slack rejects the webhook URL, you see that error here.
+ * PUT /api/repos/:id/alert-channels
+ * Updates notification channels for the specified repository.
+ */
+router.put('/repos/:id/alert-channels', requireAuth, async (req, res) => {
+  await db.read();
+  const repo = db.data.repositories.find((r) => r.id === req.params.id);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
+
+  let { slackWebhookUrl, jira, pagerDutyRoutingKey, pagerDutyEndpointOverride, email } = req.body;
+  const existing = repo.alertChannels || {};
+
+  // 1. Slack Webhook validation
+  if (slackWebhookUrl === '••••configured••••') {
+    slackWebhookUrl = existing.slackWebhookUrl;
+  } else if (slackWebhookUrl === '' || slackWebhookUrl === null) {
+    slackWebhookUrl = null;
+  } else if (slackWebhookUrl !== undefined) {
+    if (!notifications.isValidSlackWebhookUrl(slackWebhookUrl)) {
+      return res.status(400).json({
+        error: 'Invalid Slack webhook URL. Must start with https://hooks.slack.com/services/',
+      });
+    }
+    slackWebhookUrl = slackWebhookUrl.trim();
+  } else {
+    slackWebhookUrl = existing.slackWebhookUrl;
+  }
+
+  // 2. PagerDuty Routing Key validation
+  if (pagerDutyRoutingKey === '••••configured••••') {
+    pagerDutyRoutingKey = existing.pagerDutyRoutingKey;
+  } else if (pagerDutyRoutingKey === '' || pagerDutyRoutingKey === null) {
+    pagerDutyRoutingKey = null;
+  } else if (pagerDutyRoutingKey !== undefined) {
+    if (typeof pagerDutyRoutingKey !== 'string' || pagerDutyRoutingKey.trim().length < 10) {
+      return res.status(400).json({
+        error: 'Invalid PagerDuty routing key. Must be a valid Events API v2 integration key.',
+      });
+    }
+    pagerDutyRoutingKey = pagerDutyRoutingKey.trim();
+  } else {
+    pagerDutyRoutingKey = existing.pagerDutyRoutingKey;
+  }
+
+  // 3. Email validation
+  let normalizedEmail = existing.email;
+  if (email === '' || email === null || email?.to === '' || email?.to === null) {
+    normalizedEmail = null;
+  } else if (email !== undefined) {
+    const toAddress = typeof email === 'string' ? email.trim() : email?.to?.trim();
+    if (toAddress) {
+      if (!notifications.isValidEmail(toAddress)) {
+        return res.status(400).json({ error: 'Invalid email address format' });
+      }
+      normalizedEmail = { to: toAddress, configured: true };
+    } else {
+      normalizedEmail = null;
+    }
+  }
+
+  // 4. Jira configuration
+  let normalizedJira = existing.jira;
+  if (jira === null || jira === '') {
+    normalizedJira = null;
+  } else if (jira !== undefined) {
+    normalizedJira = jira;
+  }
+
+  repo.alertChannels = {
+    slackWebhookUrl: slackWebhookUrl || null,
+    jira: normalizedJira || null,
+    pagerDutyRoutingKey: pagerDutyRoutingKey || null,
+    pagerDutyEndpointOverride: pagerDutyEndpointOverride || existing.pagerDutyEndpointOverride || null,
+    email: normalizedEmail || null,
+  };
+
+  await db.write();
+
+  res.json({
+    ...redact(repo.alertChannels),
+    smtpConfigured: notifications.isSmtpConfigured(),
+    message: 'Alert channels updated successfully',
+  });
+});
+
+/**
+ * POST /api/repos/:id/alert-channels/test
+ * Sends a real test notification through configured channels.
  */
 router.post('/repos/:id/alert-channels/test', requireAuth, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo) return res.status(404).json({ error: 'Repository not found' });
-  if (!repo.alertChannels || Object.values(repo.alertChannels).every((v) => !v)) {
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
+
+  const channels = repo.alertChannels || {};
+  const hasChannels = Boolean(
+    channels.slackWebhookUrl ||
+    channels.pagerDutyRoutingKey ||
+    channels.jira ||
+    channels.email?.to
+  );
+
+  if (!hasChannels) {
     return res.status(400).json({ error: 'No alert channels configured for this repository' });
+  }
+
+  // Rate Limiting: Max 5 test alerts per 60 seconds
+  if (!checkTestRateLimit(repo.id)) {
+    return res.status(429).json({
+      error: 'Rate limit exceeded: Maximum 5 test alerts per minute. Please try again shortly.',
+    });
   }
 
   const syntheticFinding = {
     type: 'TEST_ALERT',
-    cveId: 'CVE-2025-TEST',
-    component: 'test-package',
+    cveId: 'SECURECHAIN-TEST-001',
+    component: 'test-supply-chain-package',
     version: '1.0.0',
     severity: 9.8,
-    epss: 0.42,
+    epss: 0.92,
     priorityLabel: 'P0_CRITICAL',
-    summary: 'This is a SecureChain test notification — safe to ignore.',
+    summary: 'This is a genuine SecureChain verification test alert. All configured channels are operational.',
     fixedVersions: ['1.0.1'],
   };
 
-  // priorityLabel is P0_CRITICAL so all channel types are exercised
-  // regardless of dispatchAlert's normal P0-only gating for Jira/PagerDuty.
-  const results = await notifications.dispatchAlert(repo.alertChannels, syntheticFinding);
-  res.json({ testFinding: syntheticFinding, results });
+  const results = await notifications.dispatchAlert(channels, syntheticFinding, repo);
+
+  res.json({
+    testFinding: syntheticFinding,
+    results,
+    smtpConfigured: notifications.isSmtpConfigured(),
+  });
+});
+
+/**
+ * GET /api/repos/:id/alert-history
+ * Returns the 50 most recent alert delivery events for this repository.
+ */
+router.get('/repos/:id/alert-history', requireAuth, async (req, res) => {
+  await db.read();
+  const repo = db.data.repositories.find((r) => r.id === req.params.id);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
+
+  const repoAlerts = (db.data.alerts || [])
+    .filter((a) => a.repoId === repo.id)
+    .slice(0, 50);
+
+  res.json({ history: repoAlerts });
 });
 
 function redact(channels) {
-  // Never echo back secrets in API responses; show presence only.
   return {
     slackWebhookUrl: channels.slackWebhookUrl ? '••••configured••••' : null,
     jira: channels.jira ? { baseUrl: channels.jira.baseUrl, projectKey: channels.jira.projectKey, configured: true } : null,
     pagerDutyRoutingKey: channels.pagerDutyRoutingKey ? '••••configured••••' : null,
-    email: channels.email ? { to: channels.email.to, configured: true } : null,
+    email: channels.email?.to ? { to: channels.email.to, configured: true } : null,
   };
 }
 
