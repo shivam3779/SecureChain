@@ -39,7 +39,7 @@ const KNOWN_SAFE = new Set([
   'ms', 'ws', 'qs', 'debug', 'glob', 'semver', 'uuid', 'async',
   'chalk', 'colors', 'kleur', 'picocolors', 'dotenv', 'cross-env',
   'rimraf', 'mkdirp', 'node-fetch', 'form-data', 'axios', 'got',
-  'ky', 'superagent', 'lodash', 'underscore',
+  'ky', 'superagent', 'lodash', 'underscore', 'express', 'fastify', 'koa',
 
   // React & UI ecosystems
   'react', 'react-dom', 'react-router', 'react-router-dom',
@@ -75,18 +75,35 @@ const TOP_NPM_PACKAGES = [
   'eslint', 'rollup', 'parcel', 'turbo',
 ];
 
-// ── Levenshtein distance ──────────────────────────────────────────────────────
+// ── Levenshtein distance (1D dynamic programming, zero matrix allocation) ─────
 function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  if (a.length < b.length) {
+    const tmp = a; a = b; b = tmp;
+  }
+
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i-1] === b[j-1]
-        ? dp[i-1][j-1]
-        : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
-  return dp[m][n];
+  let prev = new Int32Array(n + 1);
+  let curr = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    const aChar = a.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+    }
+    const tmp = prev; prev = curr; curr = tmp;
+  }
+  return prev[n];
 }
 
 /**
@@ -137,10 +154,10 @@ function checkTyposquat(packageName) {
  * Behavioral & Metadata Heuristics:
  * Analyzes whether an install script actually contains suspicious malware behavior.
  */
-async function checkMetadataHeuristics(packageName, version) {
+async function checkMetadataHeuristics(packageName, version, preloadedMeta = null) {
   if (isKnownSafe(packageName)) return [];
 
-  const meta = await fetchPackageMetadata(packageName);
+  const meta = preloadedMeta || await fetchPackageMetadata(packageName);
   if (!meta) return [];
 
   const findings = [];
@@ -161,7 +178,6 @@ async function checkMetadataHeuristics(packageName, version) {
     // Check for active malware patterns (obfuscation, exfiltration, token theft)
     const hasObfuscation = /eval\s*\(|atob\s*\(|fromcharcode|\\x[0-9a-f]{2}|buffer\.from\(.+['"]hex['"]\)/i.test(installScriptContent);
     const hasExfiltration = /webhook|pastebin|telegram\.org\/bot|discord\.com\/api|\b(curl|wget)\b|process\.env\.(aws|npm|token|pass|secret|gh_)/i.test(installScriptContent);
-    const hasArbitraryExecution = /child_process\s*\.\s*(exec|spawn|execsync)\s*\(/i.test(installScriptContent);
 
     if (hasObfuscation || hasExfiltration) {
       findings.push({
@@ -224,7 +240,7 @@ async function checkMetadataHeuristics(packageName, version) {
  */
 const { scorePackage } = require('./mlClassifier');
 
-async function analyzeComponents(components) {
+async function analyzeComponents(components, ecosystem = 'npm') {
   const results = [];
 
   for (const comp of components) {
@@ -237,15 +253,16 @@ async function analyzeComponents(components) {
       results.push(typosquat);
     }
 
-    // 2. Behavioral Heuristics Check
-    const heuristics = await checkMetadataHeuristics(comp.name, comp.version);
-    results.push(...heuristics);
-
-    // 3. Calibrated ML Classifier Check
+    // Single metadata fetch per component (reused across heuristics & ML classifier)
     const meta = await fetchPackageMetadata(comp.name);
+
+    // 2. Behavioral Heuristics Check
     if (meta) {
-      const mlScore = scorePackage(meta, comp.name, comp.version);
-      // Only surface ML findings if probability > 0.88 AND verified not a known safe package
+      const heuristics = await checkMetadataHeuristics(comp.name, comp.version, meta);
+      results.push(...heuristics);
+
+      // 3. Calibrated ML Classifier Check
+      const mlScore = scorePackage(meta, comp.name, comp.version, ecosystem);
       if (mlScore.verdict === 'malicious' && mlScore.maliciousProbability >= 0.88) {
         results.push({
           type: 'ML_CLASSIFIER',
@@ -254,7 +271,7 @@ async function analyzeComponents(components) {
           confidence: mlScore.confidence,
           maliciousProbability: mlScore.maliciousProbability,
           severity: 'high',
-          detail: `Machine learning classifier identified strong malicious pattern (${(mlScore.maliciousProbability * 100).toFixed(1)}% probability).`,
+          detail: `Machine learning classifier (${mlScore.ecosystem}): strong risk pattern (${(mlScore.maliciousProbability * 100).toFixed(1)}% score).`,
         });
       }
     }

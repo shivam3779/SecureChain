@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 const admin = require('../modules/adminLayer');
 const compliance = require('../modules/complianceEngine');
 const { db } = require('../db/store');
@@ -11,7 +11,9 @@ router.get('/repos/:id/compliance', requireAuth, async (req, res) => {
   try {
     await db.read();
     const repo = db.data.repositories.find(r => r.id === req.params.id);
-    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+    if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
 
     const scans     = db.data.scan_jobs.filter(s => s.repoId === repo.id);
     const sboms     = db.data.sboms.filter(s => s.repoId === repo.id);
@@ -36,19 +38,23 @@ router.get('/repos/:id/compliance', requireAuth, async (req, res) => {
 // Download compliance report as JSON
 router.get('/repos/:id/compliance/download', requireAuth, async (req, res) => {
   await db.read();
+  const repo = db.data.repositories?.find(r => r.id === req.params.id);
+  if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
   const report = db.data.compliance_reports?.find(r => r.repoId === req.params.id);
   if (!report) return res.status(404).json({ error: 'No compliance report found — generate one first via GET /compliance' });
   res.setHeader('Content-Disposition', `attachment; filename=securechain-compliance-${req.params.id}.json`);
   res.json(report);
 });
 
-// ── Organisations ─────────────────────────────────────────────────────────────
+// ── Organisations (Admin only) ────────────────────────────────────────────────
 
-router.get('/admin/orgs', requireAuth, async (req, res) => {
+router.get('/admin/orgs', requireAuth, requireAdmin, async (req, res) => {
   res.json(await admin.listOrganisations());
 });
 
-router.post('/admin/orgs', requireAuth, async (req, res) => {
+router.post('/admin/orgs', requireAuth, requireAdmin, async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
   try {
@@ -56,38 +62,38 @@ router.post('/admin/orgs', requireAuth, async (req, res) => {
   } catch (err) { res.status(409).json({ error: err.message }); }
 });
 
-router.patch('/admin/orgs/:id/plan', requireAuth, async (req, res) => {
+router.patch('/admin/orgs/:id/plan', requireAuth, requireAdmin, async (req, res) => {
   const { plan } = req.body;
   try { res.json(await admin.updateOrganisationPlan(req.params.id, plan)); }
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+// ── Users (Admin only) ────────────────────────────────────────────────────────
 
-router.get('/admin/users', requireAuth, async (req, res) => {
+router.get('/admin/users', requireAuth, requireAdmin, async (req, res) => {
   res.json(await admin.listUsers());
 });
 
-router.patch('/admin/users/:id/role', requireAuth, async (req, res) => {
+router.patch('/admin/users/:id/role', requireAuth, requireAdmin, async (req, res) => {
   const { role } = req.body;
   try { res.json(await admin.setUserRole(req.params.id, role, req.user)); }
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-router.post('/admin/users/invite', requireAuth, async (req, res) => {
+router.post('/admin/users/invite', requireAuth, requireAdmin, async (req, res) => {
   const { email, role, orgId } = req.body;
   if (!email || !role) return res.status(400).json({ error: 'email and role required' });
   try { res.status(201).json(await admin.inviteUser(email, role, orgId, req.user)); }
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ── Platform API keys ─────────────────────────────────────────────────────────
+// ── Platform API keys (Admin only) ────────────────────────────────────────────
 
-router.get('/admin/api-keys', requireAuth, async (req, res) => {
+router.get('/admin/api-keys', requireAuth, requireAdmin, async (req, res) => {
   res.json(await admin.listApiKeys(req.user.sub));
 });
 
-router.post('/admin/api-keys', requireAuth, async (req, res) => {
+router.post('/admin/api-keys', requireAuth, requireAdmin, async (req, res) => {
   const { name, scopes } = req.body;
   if (!name || !Array.isArray(scopes) || scopes.length === 0) {
     return res.status(400).json({ error: 'name and scopes[] required' });
@@ -99,16 +105,17 @@ router.post('/admin/api-keys', requireAuth, async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-router.delete('/admin/api-keys/:id', requireAuth, async (req, res) => {
+router.delete('/admin/api-keys/:id', requireAuth, requireAdmin, async (req, res) => {
   try { res.json(await admin.revokeApiKey(req.params.id, req.user)); }
   catch (err) { res.status(404).json({ error: err.message }); }
 });
 
-// ── Audit log ─────────────────────────────────────────────────────────────────
+// ── Audit log (Admin only) ────────────────────────────────────────────────────
 
-router.get('/admin/audit-log', requireAuth, async (req, res) => {
+router.get('/admin/audit-log', requireAuth, requireAdmin, async (req, res) => {
   const { limit = 50, action, targetId, actorId } = req.query;
   res.json(await admin.getAuditLog({ limit: Number(limit), action, targetId, actorId }));
 });
 
 module.exports = router;
+

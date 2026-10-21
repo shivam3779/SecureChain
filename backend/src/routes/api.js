@@ -303,10 +303,52 @@ router.get('/auth/me', requireAuth, async (req, res) => {
 
 // ---------- Repositories ----------
 
+function isRepoAuthorized(repo, user, db) {
+  if (!repo || !user) return false;
+  if (user.role === 'Admin') return true;
+  if (repo.ownerId === user.sub) return true;
+  const currentUser = db.data.users?.find(
+    (u) => String(u.githubId) === user.sub || u.googleId === user.sub || u.id === user.sub
+  );
+  if (currentUser?.orgId) {
+    const ownerUser = db.data.users?.find(
+      (u) => String(u.githubId) === repo.ownerId || u.googleId === repo.ownerId || u.id === repo.ownerId
+    );
+    if (ownerUser && ownerUser.orgId === currentUser.orgId) return true;
+  }
+  return false;
+}
+
+function getAllowedRepoIds(user, db) {
+  if (!user) return new Set();
+  if (user.role === 'Admin') {
+    return new Set((db.data.repositories || []).map((r) => r.id));
+  }
+  const currentUser = db.data.users?.find(
+    (u) => String(u.githubId) === user.sub || u.googleId === user.sub || u.id === user.sub
+  );
+  const allowedOwnerIds = new Set([user.sub]);
+  if (currentUser?.orgId) {
+    (db.data.users || [])
+      .filter((u) => u.orgId === currentUser.orgId)
+      .forEach((u) => {
+        if (u.id) allowedOwnerIds.add(u.id);
+        if (u.githubId) allowedOwnerIds.add(String(u.githubId));
+        if (u.googleId) allowedOwnerIds.add(u.googleId);
+      });
+  }
+  return new Set(
+    (db.data.repositories || [])
+      .filter((r) => allowedOwnerIds.has(r.ownerId))
+      .map((r) => r.id)
+  );
+}
+
 // Connected repos (stored in SecureChain DB — survives across sessions)
 router.get('/repos/connected', requireAuth, async (req, res) => {
   await db.read();
-  const repos = db.data.repositories.filter((r) => r.ownerId === req.user.sub);
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
+  const repos = (db.data.repositories || []).filter((r) => allowedRepoIds.has(r.id));
   // Enrich with latest scan summary
   const enriched = repos.map((repo) => {
     const latestScan = db.data.scan_jobs
@@ -402,7 +444,7 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
     const spdx = sbomEngine.toSPDX(parsedManifest.name || projectName, parsedManifest.version, tree);
     const [vulnerabilities, maliciousPackages] = await Promise.all([
       vulnEngine.correlateComponents(tree.components, 'npm'),
-      malwareAnalyzer.analyzeComponents(tree.components),
+      malwareAnalyzer.analyzeComponents(tree.components, 'npm'),
     ]);
     const gate = policyGate.evaluateGate({ vulnerabilities, maliciousPackages });
 
@@ -445,13 +487,17 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
 router.get('/repos/:id', requireAuth, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo) return res.status(404).json({ error: 'Not found' });
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
   res.json(repo);
 });
 
 router.delete('/repos/:id', requireAuth, async (req, res) => {
   await db.read();
-  const idx = db.data.repositories.findIndex((r) => r.id === req.params.id && r.ownerId === req.user.sub);
+  const idx = db.data.repositories.findIndex(
+    (r) => r.id === req.params.id && (req.user.role === 'Admin' || r.ownerId === req.user.sub)
+  );
   if (idx === -1) return res.status(404).json({ error: 'Repository not found or not owned by you' });
   const [removed] = db.data.repositories.splice(idx, 1);
   // Also clean up related scan data
@@ -478,7 +524,9 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
   try {
     await db.read();
     const repo = db.data.repositories.find((r) => r.id === req.params.id);
-    if (!repo) return res.status(404).json({ error: 'Repository not found' });
+    if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
 
     const user = db.data.users.find((u) => String(u.githubId) === req.user.sub || u.googleId === req.user.sub || u.id === req.user.sub);
 
@@ -532,7 +580,7 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
 
     const [vulnFindings, malwareFindings] = await Promise.all([
       vulnEngine.correlateComponents(tree.components, osvEcosystem),
-      malwareAnalyzer.analyzeComponents(tree.components),
+      malwareAnalyzer.analyzeComponents(tree.components, ecosystem),
     ]);
 
     const scanJob = {
@@ -660,9 +708,13 @@ function computeRiskScore(vulnFindings = [], malwareFindings = [], components = 
 
 router.get('/sboms', requireAuth, async (req, res) => {
   await db.read();
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
   const repoIdFilter = req.query.repoId;
-  let sboms = db.data.sboms || [];
+  let sboms = (db.data.sboms || []).filter((s) => allowedRepoIds.has(s.repoId));
   if (repoIdFilter) {
+    if (!allowedRepoIds.has(repoIdFilter)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
     sboms = sboms.filter(s => s.repoId === repoIdFilter);
   }
   // Sort latest first
@@ -694,6 +746,9 @@ router.get('/sboms/:id', requireAuth, async (req, res) => {
   const sbom = db.data.sboms.find((s) => s.id === req.params.id);
   if (!sbom) return res.status(404).json({ error: 'SBOM not found' });
   const repo = db.data.repositories.find((r) => r.id === sbom.repoId);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'SBOM not found or access denied' });
+  }
   const scanJob = db.data.scan_jobs.find((j) => j.id === sbom.scanJobId);
   const vulns = db.data.vulnerabilities.filter((v) => v.scanJobId === sbom.scanJobId);
   const malicious = db.data.malicious_packages.filter((m) => m.scanJobId === sbom.scanJobId);
@@ -721,13 +776,17 @@ router.get('/sboms/:id', requireAuth, async (req, res) => {
 
 router.get('/repos/:id/sbom', requireAuth, async (req, res) => {
   await db.read();
+  const repo = db.data.repositories.find((r) => r.id === req.params.id);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
+
   const sbom = db.data.sboms
     .filter((s) => s.repoId === req.params.id)
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
 
   if (!sbom) return res.status(404).json({ error: 'No SBOM generated for this repository yet' });
 
-  const repo = db.data.repositories.find((r) => r.id === sbom.repoId);
   const scanJob = db.data.scan_jobs.find((j) => j.id === sbom.scanJobId);
   const vulns = db.data.vulnerabilities.filter((v) => v.scanJobId === sbom.scanJobId);
   const malicious = db.data.malicious_packages.filter((m) => m.scanJobId === sbom.scanJobId);
@@ -740,8 +799,8 @@ router.get('/repos/:id/sbom', requireAuth, async (req, res) => {
 
   res.json({
     ...sbom,
-    repoName: repo ? repo.fullName : 'Unknown Project',
-    riskScore: repo ? repo.riskScore : null,
+    repoName: repo.fullName,
+    riskScore: repo.riskScore,
     gateVerdict: scanJob ? scanJob.gateVerdict : null,
     vulnerabilities: vulns,
     maliciousPackages: malicious,
@@ -757,6 +816,10 @@ router.get('/sboms/:id/export', requireAuth, async (req, res) => {
   await db.read();
   const sbom = db.data.sboms.find((s) => s.id === req.params.id);
   if (!sbom) return res.status(404).json({ error: 'Not found' });
+  const repo = db.data.repositories.find((r) => r.id === sbom.repoId);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'SBOM not found or access denied' });
+  }
   const format = req.query.format === 'spdx' ? 'spdx' : 'cyclonedx';
   res.setHeader('Content-Disposition', `attachment; filename=sbom-${sbom.id}-${format}.json`);
   res.json(format === 'spdx' ? sbom.spdx : sbom.cycloneDX);
@@ -772,18 +835,30 @@ router.get('/vulnerabilities/:cveId/nvd', requireAuth, async (req, res) => {
 
 router.get('/vulnerabilities/:repoId/list', requireAuth, async (req, res) => {
   await db.read();
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
   const repoId = req.params.repoId;
   const vulns = db.data.vulnerabilities || [];
-  if (repoId === 'all' || !repoId) return res.json(vulns);
-  res.json(vulns.filter((v) => v.repoId === repoId));
+  if (repoId && repoId !== 'all') {
+    if (!allowedRepoIds.has(repoId)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
+    return res.json(vulns.filter((v) => v.repoId === repoId));
+  }
+  res.json(vulns.filter((v) => allowedRepoIds.has(v.repoId)));
 });
 
 router.get('/malicious-packages/:repoId', requireAuth, async (req, res) => {
   await db.read();
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
   const repoId = req.params.repoId;
   const malicious = db.data.malicious_packages || [];
-  if (repoId === 'all' || !repoId) return res.json(malicious);
-  res.json(malicious.filter((m) => m.repoId === repoId));
+  if (repoId && repoId !== 'all') {
+    if (!allowedRepoIds.has(repoId)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
+    return res.json(malicious.filter((m) => m.repoId === repoId));
+  }
+  res.json(malicious.filter((m) => allowedRepoIds.has(m.repoId)));
 });
 
 router.patch('/vulnerabilities/:id/status', requireAuth, async (req, res) => {
@@ -793,6 +868,10 @@ router.patch('/vulnerabilities/:id/status', requireAuth, async (req, res) => {
   await db.read();
   const finding = db.data.vulnerabilities.find((v) => v.id === req.params.id);
   if (!finding) return res.status(404).json({ error: 'Not found' });
+  const repo = db.data.repositories.find((r) => r.id === finding.repoId);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Finding not found or access denied' });
+  }
   finding.status = status;
   if (status === 'Accepted Risk') finding.vex = { justification: vexJustification || 'No justification provided', acceptedAt: new Date().toISOString() };
   await db.write();
@@ -802,6 +881,11 @@ router.patch('/vulnerabilities/:id/status', requireAuth, async (req, res) => {
 // ---------- Build integrity ----------
 
 router.post('/repos/:id/verify-build', requireAuth, async (req, res) => {
+  await db.read();
+  const repo = db.data.repositories.find((r) => r.id === req.params.id);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
   const { currentContent, baselineHash } = req.body;
   if (!currentContent) return res.status(400).json({ error: 'currentContent required' });
   const verdict = buildIntegrity.verifyBuildIntegrity(currentContent, baselineHash);
@@ -809,6 +893,11 @@ router.post('/repos/:id/verify-build', requireAuth, async (req, res) => {
 });
 
 router.post('/repos/:id/set-baseline', requireAuth, async (req, res) => {
+  await db.read();
+  const repo = db.data.repositories.find((r) => r.id === req.params.id);
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
   const { content } = req.body;
   if (!content) return res.status(400).json({ error: 'content required' });
   res.json({ baselineHash: buildIntegrity.setBaseline(content) });

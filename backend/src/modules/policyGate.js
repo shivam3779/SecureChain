@@ -11,68 +11,118 @@
  */
 
 const DEFAULT_POLICY = {
-  // Block the build if any malicious/typosquat package is found at all.
+  // Block the build if any confirmed malicious package or high-confidence typosquat is found.
   blockOnAnyMaliciousPackage: true,
-  // Block on malicious heuristic findings (lower confidence) too, or only
-  // on high-confidence typosquats.
+  // Block on critical ML-flagged malware findings (>= 85% probability + high confidence)
+  blockOnCriticalMalware: true,
+  // Block on lower-confidence heuristic findings (unverified new package, burst)
   blockOnHeuristicFindings: false,
-  // Vulnerability priority labels that fail the gate.
-  blockOnPriorityLabels: ['P0_CRITICAL', 'P1_HIGH'],
-  // Minimum raw CVSS score that fails the gate regardless of EPSS, as a
-  // backstop for findings where EPSS lookup failed.
+  // Maximum allowed critical vulnerabilities (P0) before gate fails
+  maxCriticalVulns: 0,
+  // Maximum allowed high vulnerabilities (P1) before gate fails
+  maxHighVulns: 2,
+  // Exploit Prediction Scoring System (EPSS) threshold (probability of active exploitation in wild)
+  epssBlockThreshold: 0.60,
+  // Priority labels that fail the gate
+  blockOnPriorityLabels: ['P0_CRITICAL'],
+  // Minimum raw CVSS score that fails the gate
   cvssBlockThreshold: 9.0,
-  // Maximum total Open findings allowed before the gate fails outright,
-  // even if none are individually critical (alert fatigue prevention is
-  // about volume too, not just severity).
+  // Maximum total findings allowed before failing
   maxOpenFindings: 50,
-  // Build script integrity: block on any SHA-256 mismatch against baseline.
+  // Build script integrity: block on SHA-256 mismatch against baseline
   blockOnIntegrityMismatch: true,
+  // Fail-closed on incomplete, aborted, or error scans
+  failClosedOnIncomplete: true,
 };
 
-function evaluateGate(scanResult, policyOverrides = {}, buildIntegrityVerdict = null) {
+function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdict = null) {
   const policy = { ...DEFAULT_POLICY, ...policyOverrides };
   const reasons = [];
   let verdict = 'PASS';
 
-  // 1. Build integrity check (runs first, matches "verify build script
-  //    integrity" happening at build start in section 3.2.4)
+  // 0. Fail-closed check: incomplete analysis or fatal error in pipeline
+  if (scanResult.error || scanResult.incomplete) {
+    if (policy.failClosedOnIncomplete) {
+      return {
+        verdict: 'FAILED',
+        passed: false,
+        reasons: [{
+          type: 'ANALYSIS_INCOMPLETE',
+          detail: scanResult.error || 'Security scan did not complete cleanly — failing closed per policy',
+        }],
+        evaluatedAt: new Date().toISOString(),
+        policy,
+      };
+    }
+  }
+
+  // 1. Build integrity check (blocks immediately on tamper)
   if (buildIntegrityVerdict && policy.blockOnIntegrityMismatch && buildIntegrityVerdict.verdict === 'MISMATCH') {
     verdict = 'BLOCKED';
     reasons.push({
       type: 'BUILD_INTEGRITY_MISMATCH',
-      detail: buildIntegrityVerdict.detail,
+      detail: buildIntegrityVerdict.detail || 'Build workflow configuration modified unexpectedly',
     });
   }
 
-  // 2. Malicious package check (highest priority — blocks immediately per
-  //    flowchart, independent of CVE severity)
+  // 2. Malicious package check (BLOCKED)
   const maliciousFindings = scanResult.maliciousPackages || [];
   const blockingMalicious = maliciousFindings.filter((m) => {
     if (m.type === 'TYPOSQUAT') return policy.blockOnAnyMaliciousPackage;
+    if (m.severity === 'critical') return policy.blockOnAnyMaliciousPackage;
+    if (m.type === 'ML_CLASSIFIER' && m.confidence === 'high' && (m.maliciousProbability || 0) >= 0.85) {
+      return policy.blockOnCriticalMalware;
+    }
     return policy.blockOnHeuristicFindings;
   });
+
   if (blockingMalicious.length > 0) {
     verdict = 'BLOCKED';
     reasons.push({
       type: 'MALICIOUS_PACKAGE_DETECTED',
       count: blockingMalicious.length,
       packages: blockingMalicious.map((m) => m.packageName),
-      detail: `${blockingMalicious.length} malicious/typosquatted package(s) detected — build blocked immediately`,
+      detail: `${blockingMalicious.length} hostile package(s) detected — pipeline blocked immediately`,
     });
   }
 
-  // 3. Vulnerability severity threshold check
+  // 3. Vulnerability severity & EPSS threshold check (FAILED)
   const vulnFindings = scanResult.vulnerabilities || [];
-  const blockingVulns = vulnFindings.filter(
-    (v) => policy.blockOnPriorityLabels.includes(v.priorityLabel) || (v.severity != null && v.severity >= policy.cvssBlockThreshold)
+
+  const criticalVulns = vulnFindings.filter((v) =>
+    v.priorityLabel === 'P0_CRITICAL' || (v.severity != null && v.severity >= policy.cvssBlockThreshold)
   );
-  if (blockingVulns.length > 0 && verdict !== 'BLOCKED') {
+  if (criticalVulns.length > policy.maxCriticalVulns && verdict !== 'BLOCKED') {
     verdict = 'FAILED';
     reasons.push({
-      type: 'VULNERABILITY_THRESHOLD_EXCEEDED',
-      count: blockingVulns.length,
-      cveIds: blockingVulns.map((v) => v.cveId || v.id).filter(Boolean),
-      detail: `${blockingVulns.length} finding(s) at or above policy threshold (${policy.blockOnPriorityLabels.join('/')}, CVSS≥${policy.cvssBlockThreshold})`,
+      type: 'CRITICAL_VULNERABILITY_LIMIT_EXCEEDED',
+      count: criticalVulns.length,
+      cveIds: criticalVulns.map((v) => v.cveId || v.id).filter(Boolean),
+      detail: `${criticalVulns.length} critical vulnerability(ies) exceed policy limit of ${policy.maxCriticalVulns}`,
+    });
+  }
+
+  const highVulns = vulnFindings.filter((v) => v.priorityLabel === 'P1_HIGH');
+  if (highVulns.length > policy.maxHighVulns && verdict !== 'BLOCKED') {
+    verdict = 'FAILED';
+    reasons.push({
+      type: 'HIGH_VULNERABILITY_LIMIT_EXCEEDED',
+      count: highVulns.length,
+      cveIds: highVulns.map((v) => v.cveId || v.id).filter(Boolean),
+      detail: `${highVulns.length} high-severity findings exceed policy limit of ${policy.maxHighVulns}`,
+    });
+  }
+
+  const highEpssVulns = vulnFindings.filter((v) =>
+    typeof v.epss === 'number' && !isNaN(v.epss) && v.epss >= policy.epssBlockThreshold
+  );
+  if (highEpssVulns.length > 0 && verdict !== 'BLOCKED') {
+    verdict = 'FAILED';
+    reasons.push({
+      type: 'EPSS_EXPLOIT_RISK_EXCEEDED',
+      count: highEpssVulns.length,
+      cveIds: highEpssVulns.map((v) => v.cveId || v.id).filter(Boolean),
+      detail: `${highEpssVulns.length} finding(s) have EPSS exploit probability >= ${(policy.epssBlockThreshold * 100).toFixed(0)}%`,
     });
   }
 

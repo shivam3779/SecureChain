@@ -46,7 +46,9 @@ async function authenticateApiKey(req, res, next) {
 router.post('/repos/:id/api-key', requireAuth, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo) return res.status(404).json({ error: 'Repository not found' });
+  if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+    return res.status(404).json({ error: 'Repository not found or access denied' });
+  }
   repo.ciApiKey = `sk_ci_${uuid().replace(/-/g, '')}`;
   await db.write();
   res.json({ apiKey: repo.ciApiKey });
@@ -64,7 +66,7 @@ router.post('/sbom-submit', express.json({ limit: '5mb' }), authenticateApiKey, 
 
     const [vulnerabilities, maliciousPackages] = await Promise.all([
       vulnEngine.correlateComponents(tree.components, ecosystem),
-      malwareAnalyzer.analyzeComponents(tree.components),
+      malwareAnalyzer.analyzeComponents(tree.components, ecosystem),
     ]);
 
     let integrityVerdict = null;
@@ -128,23 +130,57 @@ router.post('/sbom-submit', express.json({ limit: '5mb' }), authenticateApiKey, 
 
 router.post(
   '/webhooks/github-actions',
-  express.raw({ type: 'application/json' }), // need raw body for HMAC verification
+  express.raw({ type: '*/*', limit: '2mb' }),
   async (req, res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const signature = req.headers['x-hub-signature-256'];
     const event = req.headers['x-github-event'];
 
-    if (secret && !verifyGitHubSignature(req.body, signature, secret)) {
-      return res.status(401).json({ error: 'Invalid webhook signature' });
+    if (isProduction && !secret) {
+      return res.status(500).json({ error: 'GITHUB_WEBHOOK_SECRET not configured' });
     }
 
-    const payload = JSON.parse(req.body.toString('utf-8'));
+    if (!secret || !verifyGitHubSignature(req.body, signature, secret)) {
+      if (!isProduction && process.env.ALLOW_INSECURE_DEV_WEBHOOKS === 'true') {
+        // Dev bypass only when explicitly requested
+      } else {
+        return res.status(401).json({ error: 'Invalid or missing webhook signature' });
+      }
+    }
+
+    let payload;
+    try {
+      const rawText = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : String(req.body || '');
+      payload = JSON.parse(rawText);
+    } catch {
+      return res.status(400).json({ error: 'Malformed JSON payload' });
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ error: 'Invalid payload structure' });
+    }
+
     if (event !== 'workflow_run') return res.json({ ignored: true, event });
 
     await db.read();
     const run = payload.workflow_run;
+    if (!run) return res.status(400).json({ error: 'Missing workflow_run object in payload' });
+
+    // Deduplicate runs by GitHub run ID
+    const runKey = `gh_run_${run.id || run.head_sha}`;
+    const existing = db.data.scan_jobs.find((s) => s.externalRunId === runKey);
+    if (existing) {
+      existing.conclusion = run.conclusion;
+      existing.status = run.status;
+      existing.updatedAt = new Date().toISOString();
+      await db.write();
+      return res.json({ received: true, updated: true, conclusion: run.conclusion });
+    }
+
     db.data.scan_jobs.push({
       id: uuid(),
+      externalRunId: runKey,
       source: 'GITHUB_ACTIONS_WEBHOOK',
       repoFullName: payload.repository?.full_name,
       workflowName: run.name,
@@ -160,19 +196,44 @@ router.post(
   }
 );
 
-router.post('/webhooks/gitlab-ci', express.json(), async (req, res) => {
+router.post('/webhooks/gitlab-ci', express.json({ limit: '2mb' }), async (req, res) => {
+  const isProduction = process.env.NODE_ENV === 'production';
   const secret = process.env.GITLAB_WEBHOOK_SECRET;
   const token = req.headers['x-gitlab-token'];
-  if (secret && !verifyGitLabToken(token, secret)) {
-    return res.status(401).json({ error: 'Invalid webhook token' });
+
+  if (isProduction && !secret) {
+    return res.status(500).json({ error: 'GITLAB_WEBHOOK_SECRET not configured' });
+  }
+
+  if (!secret || !verifyGitLabToken(token, secret)) {
+    if (!isProduction && process.env.ALLOW_INSECURE_DEV_WEBHOOKS === 'true') {
+      // Dev bypass only when explicitly requested
+    } else {
+      return res.status(401).json({ error: 'Invalid or missing webhook token' });
+    }
   }
 
   const payload = req.body;
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ error: 'Invalid payload structure' });
+  }
+
   if (payload.object_kind !== 'pipeline') return res.json({ ignored: true, kind: payload.object_kind });
 
   await db.read();
+  const pipelineId = payload.object_attributes?.id;
+  const runKey = `gl_pipeline_${pipelineId || payload.object_attributes?.sha}`;
+  const existing = db.data.scan_jobs.find((s) => s.externalRunId === runKey);
+  if (existing) {
+    existing.status = payload.object_attributes?.status;
+    existing.updatedAt = new Date().toISOString();
+    await db.write();
+    return res.json({ received: true, updated: true, status: existing.status });
+  }
+
   db.data.scan_jobs.push({
     id: uuid(),
+    externalRunId: runKey,
     source: 'GITLAB_CI_WEBHOOK',
     repoFullName: payload.project?.path_with_namespace,
     status: payload.object_attributes?.status,
@@ -189,24 +250,38 @@ router.post('/webhooks/gitlab-ci', express.json(), async (req, res) => {
  * /jenkins/Jenkinsfile.example) posts its own build metadata here after
  * calling the securechain-cli sbom-submit step.
  */
-router.post('/webhooks/jenkins', express.json(), authenticateApiKey, async (req, res) => {
+router.post('/webhooks/jenkins', express.json({ limit: '2mb' }), authenticateApiKey, async (req, res) => {
   await db.read();
   db.data.scan_jobs.push({
     id: uuid(),
     source: 'JENKINS_WEBHOOK',
     repoId: req.repo.id,
-    buildNumber: req.body.buildNumber,
-    result: req.body.result,
-    jobUrl: req.body.jobUrl,
+    buildNumber: req.body?.buildNumber,
+    result: req.body?.result,
+    jobUrl: req.body?.jobUrl,
     receivedAt: new Date().toISOString(),
   });
   await db.write();
   res.json({ received: true });
 });
 
-router.get('/pipeline-runs', async (req, res) => {
+router.get('/pipeline-runs', requireAuth, async (req, res) => {
   await db.read();
-  const runs = db.data.scan_jobs.filter((s) => s.source && s.source.includes('WEBHOOK'));
+  const userRepos = (db.data.repositories || []).filter(
+    (r) => req.user.role === 'Admin' || r.ownerId === req.user.sub
+  );
+  const allowedIds = new Set(userRepos.map((r) => r.id));
+  const allowedNames = new Set(
+    userRepos.map((r) => (r.fullName ? r.fullName.toLowerCase() : ''))
+  );
+
+  const runs = (db.data.scan_jobs || []).filter((s) => {
+    if (!s.source || !s.source.includes('WEBHOOK')) return false;
+    if (req.user.role === 'Admin') return true;
+    if (s.repoId && allowedIds.has(s.repoId)) return true;
+    if (s.repoFullName && allowedNames.has(s.repoFullName.toLowerCase())) return true;
+    return false;
+  });
   res.json(runs);
 });
 

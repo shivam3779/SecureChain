@@ -13,11 +13,18 @@
 const { Low } = require('lowdb');
 const { JSONFile } = require('lowdb/node');
 const path = require('path');
+const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { SCHEMA_SQL } = require('./supabaseStore');
 
-const file = path.join(__dirname, 'securechain.db.json');
+const defaultDbPath = path.join(__dirname, 'securechain.db.json');
+const file = process.env.DATA_PATH || process.env.DB_FILE || defaultDbPath;
+try {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+} catch {
+  // directory already exists or read-only
+}
 const adapter = new JSONFile(file);
 const defaultData = {
   organisations: [],
@@ -30,9 +37,13 @@ const defaultData = {
   alerts: [],
   compliance_reports: [],
   api_keys: [],
+  audit_log: [],
+  team_requests: [],
 };
 
 const lowDb = new Low(adapter, defaultData);
+
+let writeQueue = Promise.resolve();
 
 let supabaseClient = null;
 let supabaseConnected = false;
@@ -165,21 +176,41 @@ const db = {
     }
   },
   async write() {
-    await lowDb.write();
+    // Serialize local file writes to prevent race conditions & lost updates
+    writeQueue = writeQueue.then(async () => {
+      await lowDb.write();
+    }).catch((err) => {
+      console.error('[db] Error persisting database file:', err.message);
+    });
+    await writeQueue;
 
-    // Asynchronously push users to Supabase if configured
+    // Asynchronously sync entities to Supabase if configured
     const sb = getSupabase();
-    if (sb && Array.isArray(lowDb.data.users) && lowDb.data.users.length > 0) {
+    if (sb) {
       try {
-        const userMap = new Map();
-        for (const u of lowDb.data.users) {
-          if (u.id) userMap.set(u.id, formatUserForSupabase(u));
+        if (Array.isArray(lowDb.data.users) && lowDb.data.users.length > 0) {
+          const userMap = new Map();
+          for (const u of lowDb.data.users) {
+            if (u.id) userMap.set(u.id, formatUserForSupabase(u));
+          }
+          const userRows = Array.from(userMap.values());
+          sb.from('users').upsert(userRows, { onConflict: 'id' }).catch(() => {});
         }
-        const rows = Array.from(userMap.values());
-        sb.from('users').upsert(rows, { onConflict: 'id' }).then(({ error }) => {
-          if (error) console.warn('[db] Background Supabase user sync notice:', error.message);
-          else supabaseConnected = true;
-        }).catch(() => {});
+
+        if (Array.isArray(lowDb.data.repositories) && lowDb.data.repositories.length > 0) {
+          const repoRows = lowDb.data.repositories.map(r => ({
+            id: r.id,
+            full_name: r.fullName,
+            default_branch: r.defaultBranch || 'main',
+            owner_id: r.ownerId,
+            risk_score: r.riskScore,
+            last_scan_id: r.lastScanId,
+            policy: r.policy,
+            alert_channels: r.alertChannels,
+            created_at: r.createdAt || new Date().toISOString(),
+          }));
+          sb.from('repositories').upsert(repoRows, { onConflict: 'id' }).catch(() => {});
+        }
       } catch {
         // non-blocking
       }

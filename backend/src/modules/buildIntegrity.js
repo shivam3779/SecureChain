@@ -14,17 +14,40 @@ function sha256(content) {
  * hash. Returns a verdict object, never throws.
  */
 function verifyBuildIntegrity(currentContent, baselineHash) {
-  const currentHash = sha256(currentContent);
-  const match = currentHash === baselineHash;
-  return {
-    match,
-    currentHash,
-    baselineHash,
-    verdict: match ? 'VERIFIED' : 'MISMATCH',
-    detail: match
-      ? 'CI configuration matches approved baseline'
-      : 'CI configuration hash differs from approved baseline — possible tampering',
-  };
+  if (!currentContent || !baselineHash) {
+    return {
+      match: false,
+      currentHash: null,
+      baselineHash: baselineHash || null,
+      verdict: 'MISMATCH',
+      detail: 'Missing build configuration content or approved baseline hash',
+    };
+  }
+
+  try {
+    const currentHash = sha256(currentContent);
+    const bufA = Buffer.from(currentHash);
+    const bufB = Buffer.from(String(baselineHash).trim());
+    const match = bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+
+    return {
+      match,
+      currentHash,
+      baselineHash,
+      verdict: match ? 'VERIFIED' : 'MISMATCH',
+      detail: match
+        ? 'CI configuration matches approved baseline'
+        : 'CI configuration hash differs from approved baseline — possible tampering',
+    };
+  } catch (err) {
+    return {
+      match: false,
+      currentHash: null,
+      baselineHash,
+      verdict: 'MISMATCH',
+      detail: `Verification error: ${err.message}`,
+    };
+  }
 }
 
 function setBaseline(content) {

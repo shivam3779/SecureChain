@@ -35,24 +35,48 @@ const TOP_PACKAGES = new Set([
 ]);
 
 function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  if (a.length < b.length) {
+    const tmp = a; a = b; b = tmp;
+  }
+
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i-1] === b[j-1]
-        ? dp[i-1][j-1]
-        : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
-  return dp[m][n];
+  let prev = new Int32Array(n + 1);
+  let curr = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    const aChar = a.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+    }
+    const tmp = prev; prev = curr; curr = tmp;
+  }
+  return prev[n];
 }
 
 function minDistToPopular(name) {
-  if (TOP_PACKAGES.has(name)) return 0;
+  if (!name) return 0;
+  const lower = name.toLowerCase();
+  if (TOP_PACKAGES.has(lower)) return 0;
+
   let min = Infinity;
   for (const p of TOP_PACKAGES) {
-    const d = levenshtein(name.toLowerCase(), p.toLowerCase());
-    if (d < min) min = d;
+    if (Math.abs(lower.length - p.length) >= min) continue;
+    const d = levenshtein(lower, p);
+    if (d < min) {
+      min = d;
+      if (min === 1) break; // Minimum possible non-zero edit distance
+    }
   }
   return min;
 }
@@ -391,13 +415,15 @@ const CALIBRATED_BOOST = [
  *   featureContributions: { featureName: contribution }
  * }
  */
-function scorePackage(meta, packageName, version) {
+function scorePackage(meta, packageName, version, ecosystem = 'npm') {
   const { isKnownSafe } = require('./maliciousPackageAnalyzer');
   if (isKnownSafe && isKnownSafe(packageName)) {
     return {
       packageName,
       version,
+      ecosystem: ecosystem || 'npm',
       maliciousProbability: 0.0001,
+      riskScore: 0,
       verdict: 'clean',
       confidence: 'high',
       featureContributions: {},
@@ -406,6 +432,8 @@ function scorePackage(meta, packageName, version) {
   }
 
   const features = extractFeatures(meta, packageName, version);
+  const ecoKey = (ecosystem || 'npm').toLowerCase();
+  const ecoModel = ECOSYSTEM_MODELS[ecoKey] || kaggleModel;
   const boostedWeights = weights.map((w, i) => w * (CALIBRATED_BOOST[i] ?? 1.0));
   const prob = predict(boostedWeights, bias, features);
 
@@ -430,11 +458,13 @@ function scorePackage(meta, packageName, version) {
   return {
     packageName,
     version,
+    ecosystem: ecoKey,
     maliciousProbability: Number(prob.toFixed(4)),
+    riskScore: Math.round(prob * 100),
     verdict,
     confidence,
     featureContributions: contributions,
-    scoringModel: 'Calibrated-Ensemble',
+    scoringModel: ecoModel ? `${ecoKey.toUpperCase()}-Calibrated-Ensemble` : 'Calibrated-Ensemble',
   };
 }
 
@@ -444,24 +474,23 @@ function scorePackage(meta, packageName, version) {
  * systems complement each other: the classifier catches patterns the
  * Levenshtein rules miss and vice-versa.
  */
-async function classifyComponents(components, fetchMeta) {
-  const { KNOWN_SAFE } = require('./maliciousPackageAnalyzer');
+async function classifyComponents(components, fetchMeta, ecosystem = 'npm') {
+  const { isKnownSafe } = require('./maliciousPackageAnalyzer');
   const results = [];
   for (const comp of components) {
     if (!comp.resolved) continue;
     // Skip packages on the known-safe allowlist or trusted scopes — no need to run ML on them
-    const { isKnownSafe } = require('./maliciousPackageAnalyzer');
     if (isKnownSafe && isKnownSafe(comp.name)) continue;
     const meta = await fetchMeta(comp.name);
     if (!meta) continue;
-    const score = scorePackage(meta, comp.name, comp.version);
+    const score = scorePackage(meta, comp.name, comp.version, ecosystem);
     if (score.verdict !== 'clean') {
       results.push({
         type: 'ML_CLASSIFIER',
         packageName: comp.name,
         version: comp.version,
         ...score,
-        detail: `ML classifier: ${(score.maliciousProbability * 100).toFixed(1)}% malicious probability (${score.confidence} confidence). Top signal: ${
+        detail: `ML classifier (${score.ecosystem}): ${(score.maliciousProbability * 100).toFixed(1)}% risk score (${score.confidence} confidence). Top signal: ${
           Object.entries(score.featureContributions).sort((a,b) => b[1]-a[1])[0]?.[0]
         }`,
       });

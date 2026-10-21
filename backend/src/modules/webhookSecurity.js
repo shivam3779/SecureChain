@@ -9,12 +9,17 @@
 const crypto = require('crypto');
 
 function verifyGitHubSignature(rawBody, signatureHeader, secret) {
-  if (!signatureHeader || !secret) return false;
-  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  const sigBuf = Buffer.from(signatureHeader);
-  const expBuf = Buffer.from(expected);
-  if (sigBuf.length !== expBuf.length) return false;
-  return crypto.timingSafeEqual(sigBuf, expBuf);
+  if (!signatureHeader || !secret || rawBody == null) return false;
+  try {
+    const bodyBuffer = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody), 'utf-8');
+    const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(bodyBuffer).digest('hex');
+    const sigBuf = Buffer.from(signatureHeader);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length) return false;
+    return crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -24,10 +29,14 @@ function verifyGitHubSignature(rawBody, signatureHeader, secret) {
  */
 function verifyGitLabToken(tokenHeader, secret) {
   if (!tokenHeader || !secret) return false;
-  const a = Buffer.from(tokenHeader);
-  const b = Buffer.from(secret);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  try {
+    const a = Buffer.from(String(tokenHeader));
+    const b = Buffer.from(String(secret));
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 /**

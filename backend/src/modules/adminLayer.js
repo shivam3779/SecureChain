@@ -77,6 +77,9 @@ async function updateOrganisationPlan(orgId, plan) {
 const VALID_ROLES = ['Admin', 'Developer', 'SecurityAnalyst', 'DevOpsEngineer', 'Viewer'];
 
 async function setUserRole(targetUserId, role, actorUser) {
+  if (!actorUser || (actorUser.role !== 'Admin' && actorUser.role !== 'admin')) {
+    throw new Error('Unauthorized: Only administrators can modify user roles');
+  }
   if (!VALID_ROLES.includes(role)) throw new Error(`Role must be one of: ${VALID_ROLES.join(', ')}`);
 
   await db.read();
@@ -84,6 +87,12 @@ async function setUserRole(targetUserId, role, actorUser) {
   if (!user) throw new Error('User not found');
 
   const previousRole = user.role;
+  if (previousRole === 'Admin' && role !== 'Admin') {
+    const adminCount = db.data.users.filter(u => u.role === 'Admin').length;
+    if (adminCount <= 1) {
+      throw new Error('Cannot demote the last remaining administrator');
+    }
+  }
   user.role = role;
   await db.write();
 
