@@ -107,7 +107,7 @@ function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdi
   }
 
   // 2. Malicious package check (BLOCKED)
-  const maliciousFindings = scanResult.maliciousPackages || [];
+  const maliciousFindings = scanResult.maliciousPackages || scanResult.malwareFindings || [];
   const blockingMalicious = maliciousFindings.filter((m) => {
     if (m.type === 'TYPOSQUAT') return policy.blockOnAnyMaliciousPackage;
     if (m.severity === 'critical') return policy.blockOnAnyMaliciousPackage;
