@@ -381,32 +381,51 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
     const { manifestContent, projectName = 'my-project', maxDepth = 2 } = req.body;
     if (!manifestContent) return res.status(400).json({ error: 'manifestContent is required' });
 
-    let parsedManifest;
+    let parsedManifest = null;
+    let manifestCorrupted = false;
+    let parseError = null;
+
     try {
       parsedManifest = typeof manifestContent === 'string' ? JSON.parse(manifestContent) : manifestContent;
-    } catch {
-      return res.status(400).json({ error: 'Invalid JSON — paste the full contents of your package.json' });
+    } catch (err) {
+      manifestCorrupted = true;
+      parseError = err.message;
     }
 
-    const rootDeps = {
-      ...(parsedManifest.dependencies || {}),
-      ...(parsedManifest.devDependencies || {}),
-    };
-    if (Object.keys(rootDeps).length === 0) {
-      return res.status(400).json({
-        error: 'No dependencies found in the pasted package.json',
-        detail: 'Make sure you paste the COMPLETE package.json file — it should contain a "dependencies" or "devDependencies" section. You seem to have pasted only part of the file.',
-      });
+    let rootDeps = {};
+    if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
+      const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
+      const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
+      rootDeps = { ...deps, ...devDeps };
+    }
+
+    // Fallback regex extractor if JSON parse failed or no dependencies were parsed
+    if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
+      const rawText = typeof manifestContent === 'string' ? manifestContent : JSON.stringify(manifestContent);
+      const fallbackDeps = sbomEngine.extractDependenciesFromCorruptJson(rawText);
+      if (Object.keys(fallbackDeps).length > 0) {
+        rootDeps = { ...rootDeps, ...fallbackDeps };
+        manifestCorrupted = true;
+        if (!parseError) parseError = 'Manifest dependency structure invalid or unparseable';
+      }
     }
 
     const tree = await sbomEngine.resolveDependencyTree(rootDeps, { maxDepth });
-    const cycloneDX = sbomEngine.toCycloneDX(parsedManifest.name || projectName, parsedManifest.version, tree);
-    const spdx = sbomEngine.toSPDX(parsedManifest.name || projectName, parsedManifest.version, tree);
+    const cycloneDX = sbomEngine.toCycloneDX(parsedManifest?.name || projectName, parsedManifest?.version, tree);
+    const spdx = sbomEngine.toSPDX(parsedManifest?.name || projectName, parsedManifest?.version, tree);
     const [vulnerabilities, maliciousPackages] = await Promise.all([
       vulnEngine.correlateComponents(tree.components, 'npm'),
       malwareAnalyzer.analyzeComponents(tree.components, 'npm'),
     ]);
-    const gate = policyGate.evaluateGate({ vulnerabilities, maliciousPackages });
+
+    const scanResult = {
+      vulnerabilities,
+      maliciousPackages,
+      components: tree.components,
+      manifestCorrupted,
+      parseError,
+    };
+    const gate = policyGate.evaluateGate(scanResult);
 
     await db.read();
     let repo = db.data.repositories.find(r => r.fullName === projectName && r.ownerId === req.user.sub);
@@ -422,12 +441,16 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
     for (const m of maliciousPackages) db.data.malicious_packages.push({ id: uuid(), repoId: repo.id, scanJobId: scanJob.id, ...m });
     repo.lastScanId = scanJob.id;
     computeHarmnessAndRank(vulnerabilities, maliciousPackages, tree.components);
-    repo.riskScore = computeRiskScore(vulnerabilities, maliciousPackages, tree.components);
+    repo.riskScore = (gate.verdict === 'BLOCKED' && gate.riskScore === 0)
+      ? 0
+      : computeRiskScore(vulnerabilities, maliciousPackages, tree.components, scanResult);
     await db.write();
 
     res.json({
       scanJob,
       riskScore: repo.riskScore,
+      manifestCorrupted,
+      parseError,
       repoId: repo.id,
       sbomSummary: { totalComponents: tree.components.length, resolved: tree.components.filter(c => c.resolved).length },
       vulnerabilities,
@@ -436,7 +459,7 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
       components: tree.components,
       cycloneDX,
       spdx,
-      gate: { verdict: gate.verdict, reasons: gate.reasons }
+      gate: { verdict: gate.verdict, reasons: gate.reasons, riskScore: gate.riskScore }
     });
   } catch (err) {
     res.status(500).json({ error: 'Scan failed', detail: err.message });
@@ -513,11 +536,37 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
     }
 
     let tree, ecosystem;
+    let manifestCorrupted = false;
+    let parseError = null;
+
     if (manifestPath === 'package.json') {
-      const rootDeps = { ...(manifest.dependencies || {}), ...(manifest.devDependencies || {}) };
-      if (Object.keys(rootDeps).length === 0) {
-        return res.status(400).json({ error: 'No dependencies found in package.json' });
+      let parsedManifest = manifest;
+      if (typeof manifest === 'string') {
+        try {
+          parsedManifest = JSON.parse(manifest);
+        } catch (e) {
+          manifestCorrupted = true;
+          parseError = e.message;
+        }
       }
+
+      let rootDeps = {};
+      if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
+        const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
+        const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
+        rootDeps = { ...deps, ...devDeps };
+      }
+
+      if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
+        const rawText = typeof manifest === 'string' ? manifest : JSON.stringify(manifest);
+        const fallback = sbomEngine.extractDependenciesFromCorruptJson(rawText);
+        if (Object.keys(fallback).length > 0) {
+          rootDeps = { ...rootDeps, ...fallback };
+          manifestCorrupted = true;
+          if (!parseError) parseError = 'Corrupt dependency section in manifest';
+        }
+      }
+
       tree = await sbomEngine.resolveDependencyTree(rootDeps, { maxDepth: req.body.maxDepth ?? 2 });
       ecosystem = 'npm';
     } else {
@@ -525,12 +574,16 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
       const result = await ecosystemResolvers.resolveFromManifest(manifestPath.split('/').pop(), rawContent, { maxDepth: req.body.maxDepth ?? 2 });
       tree = result;
       ecosystem = result.ecosystem || 'npm';
+      if (result.manifestCorrupted) {
+        manifestCorrupted = true;
+        parseError = result.parseError;
+      }
     }
 
     const osvEcosystem = ecosystemResolvers.ecosystemToOSV(ecosystem);
 
-    const cycloneDX = sbomEngine.toCycloneDX(manifest.name || repoName, manifest.version, tree);
-    const spdx = sbomEngine.toSPDX(manifest.name || repoName, manifest.version, tree);
+    const cycloneDX = sbomEngine.toCycloneDX(manifest?.name || repoName, manifest?.version, tree);
+    const spdx = sbomEngine.toSPDX(manifest?.name || repoName, manifest?.version, tree);
 
     // Diff against the previous SBOM for this repo, if one exists
     const previousSbom = db.data.sboms
@@ -543,10 +596,20 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
       malwareAnalyzer.analyzeComponents(tree.components, ecosystem),
     ]);
 
+    const scanResult = {
+      vulnerabilities: vulnFindings,
+      maliciousPackages: malwareFindings,
+      components: tree.components,
+      manifestCorrupted,
+      parseError,
+    };
+    const gate = policyGate.evaluateGate(scanResult);
+
     const scanJob = {
       id: uuid(),
       repoId: repo.id,
       status: 'completed',
+      gateVerdict: gate.verdict,
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt,
       componentCount: tree.components.length,
@@ -575,7 +638,9 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
 
     repo.lastScanId = scanJob.id;
     computeHarmnessAndRank(vulnFindings, malwareFindings, tree.components);
-    repo.riskScore = computeRiskScore(vulnFindings, malwareFindings, tree.components);
+    repo.riskScore = (gate.verdict === 'BLOCKED' && gate.riskScore === 0)
+      ? 0
+      : computeRiskScore(vulnFindings, malwareFindings, tree.components, scanResult);
     await db.write();
 
     // Trigger non-blocking scan alerts for qualifying findings
@@ -586,6 +651,9 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
     res.json({
       scanJob,
       riskScore: repo.riskScore,
+      manifestCorrupted,
+      parseError,
+      gate: { verdict: gate.verdict, reasons: gate.reasons, riskScore: gate.riskScore },
       sbomSummary: { totalComponents: tree.components.length, resolved: tree.components.filter((c) => c.resolved).length },
       diff,
       vulnerabilities: vulnFindings,
@@ -653,7 +721,17 @@ function computeHarmnessAndRank(vulnFindings = [], malwareFindings = [], compone
   malwareFindings.forEach((m, idx) => { m.damageRank = idx + 1; });
 }
 
-function computeRiskScore(vulnFindings = [], malwareFindings = [], components = []) {
+function computeRiskScore(vulnFindings = [], malwareFindings = [], components = [], scanResult = {}) {
+  // If manifest was corrupted, had parse errors, corrupt component entries, or zero components, risk score is immediately 0
+  if (
+    scanResult.manifestCorrupted === true ||
+    Boolean(scanResult.parseError) ||
+    (components || []).some((c) => c.corruptEntry === true) ||
+    (components || []).length === 0
+  ) {
+    return 0;
+  }
+
   computeHarmnessAndRank(vulnFindings, malwareFindings, components);
 
   let deduction = 0;

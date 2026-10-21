@@ -40,6 +40,47 @@ function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdi
   const reasons = [];
   let verdict = 'PASS';
 
+  const components = Array.isArray(scanResult.components) ? scanResult.components : null;
+  const hasCorruptComponent = components ? components.some((c) => c.corruptEntry === true) : false;
+  const isEmptyComponents = components !== null && components.length === 0;
+
+  // Top-level fail-closed check: corrupt manifest, parse error, malformed component entries, or empty components
+  if (
+    scanResult.manifestCorrupted === true ||
+    Boolean(scanResult.parseError) ||
+    hasCorruptComponent ||
+    isEmptyComponents
+  ) {
+    const corruptReasons = [];
+    if (scanResult.manifestCorrupted === true) {
+      corruptReasons.push('Manifest corrupted or invalid syntax');
+    }
+    if (scanResult.parseError) {
+      corruptReasons.push(`Manifest parser error: ${scanResult.parseError}`);
+    }
+    if (hasCorruptComponent) {
+      const count = components.filter((c) => c.corruptEntry).length;
+      corruptReasons.push(`${count} malformed or invalid dependency entry(ies) in manifest`);
+    }
+    if (isEmptyComponents) {
+      corruptReasons.push('No valid software components found in manifest');
+    }
+
+    return {
+      verdict: 'BLOCKED',
+      passed: false,
+      riskScore: 0,
+      reasons: [
+        {
+          type: 'MANIFEST_CORRUPTED_OR_EMPTY',
+          detail: corruptReasons.join('; ') || 'Manifest is corrupted, unparseable, or empty — failing closed per policy',
+        },
+      ],
+      evaluatedAt: new Date().toISOString(),
+      policy,
+    };
+  }
+
   // 0. Fail-closed check: incomplete analysis or fatal error in pipeline
   if (scanResult.error || scanResult.incomplete) {
     if (policy.failClosedOnIncomplete) {

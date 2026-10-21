@@ -101,4 +101,48 @@ describe('Policy Gate Decision Engine', () => {
     assert.equal(decision.passed, false);
     assert.equal(decision.reasons[0].type, 'ANALYSIS_INCOMPLETE');
   });
+
+  test('forces BLOCKED verdict and 0 risk score on manifestCorrupted flag or parseError', () => {
+    const scan = {
+      manifestCorrupted: true,
+      parseError: 'Unexpected token } in JSON at position 142',
+      vulnerabilities: [],
+      maliciousPackages: [],
+      components: [{ name: 'lodash', version: '4.17.15' }],
+    };
+    const decision = evaluateGate(scan);
+    assert.equal(decision.verdict, 'BLOCKED');
+    assert.equal(decision.passed, false);
+    assert.equal(decision.riskScore, 0);
+    assert.equal(decision.reasons[0].type, 'MANIFEST_CORRUPTED_OR_EMPTY');
+  });
+
+  test('forces BLOCKED verdict and 0 risk score on corruptEntry component', () => {
+    const scan = {
+      vulnerabilities: [],
+      maliciousPackages: [],
+      components: [
+        { name: 'lodash', version: '4.17.21' },
+        { name: 'bad-pkg', version: '0.0.0', corruptEntry: true },
+      ],
+    };
+    const decision = evaluateGate(scan);
+    assert.equal(decision.verdict, 'BLOCKED');
+    assert.equal(decision.passed, false);
+    assert.equal(decision.riskScore, 0);
+    assert.equal(decision.reasons[0].type, 'MANIFEST_CORRUPTED_OR_EMPTY');
+  });
+
+  test('forces BLOCKED verdict and 0 risk score on empty components list', () => {
+    const scan = {
+      vulnerabilities: [],
+      maliciousPackages: [],
+      components: [],
+    };
+    const decision = evaluateGate(scan);
+    assert.equal(decision.verdict, 'BLOCKED');
+    assert.equal(decision.passed, false);
+    assert.equal(decision.riskScore, 0);
+    assert.equal(decision.reasons[0].type, 'MANIFEST_CORRUPTED_OR_EMPTY');
+  });
 });

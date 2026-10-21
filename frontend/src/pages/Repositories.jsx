@@ -462,6 +462,16 @@ export default function Repositories() {
                 <ScanResultBadges sr={manifestResult} />
               </Card>
 
+              {/* Corrupt manifest warning */}
+              {manifestResult.manifestCorrupted && (
+                <Card className="p-4 border-rose-300 bg-rose-50/60 shadow-xs">
+                  <SectionLabel className="text-rose-800">⚠️ Corrupt Manifest Detected</SectionLabel>
+                  <p className="text-xs font-mono text-rose-700 mt-1">
+                    {manifestResult.parseError || 'Syntax error in manifest JSON'}. Extracted dependencies using regex fallback parser. Policy gate enforced fail-closed (BLOCKED, Risk Score 0).
+                  </p>
+                </Card>
+              )}
+
               {/* Show blocking reasons if any */}
               {manifestResult.gate?.reasons?.length > 0 && (
                 <Card className="p-4 border-rose-200 bg-rose-50/30">

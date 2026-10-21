@@ -60,9 +60,38 @@ router.post('/sbom-submit', express.json({ limit: '5mb' }), authenticateApiKey, 
     const { manifest, ciConfigContent, ciConfigBaselineHash, ecosystem = 'npm', maxDepth = 2 } = req.body;
     if (!manifest) return res.status(400).json({ error: 'manifest (parsed package.json contents) is required' });
 
-    const rootDeps = { ...(manifest.dependencies || {}), ...(manifest.devDependencies || {}) };
+    let parsedManifest = manifest;
+    let manifestCorrupted = false;
+    let parseError = null;
+
+    if (typeof manifest === 'string') {
+      try {
+        parsedManifest = JSON.parse(manifest);
+      } catch (e) {
+        manifestCorrupted = true;
+        parseError = e.message;
+      }
+    }
+
+    let rootDeps = {};
+    if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
+      const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
+      const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
+      rootDeps = { ...deps, ...devDeps };
+    }
+
+    if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
+      const rawText = typeof manifest === 'string' ? manifest : JSON.stringify(manifest);
+      const fallback = sbomEngine.extractDependenciesFromCorruptJson(rawText);
+      if (Object.keys(fallback).length > 0) {
+        rootDeps = { ...rootDeps, ...fallback };
+        manifestCorrupted = true;
+        if (!parseError) parseError = 'Manifest dependency structure invalid or unparseable';
+      }
+    }
+
     const tree = await sbomEngine.resolveDependencyTree(rootDeps, { maxDepth });
-    const cycloneDX = sbomEngine.toCycloneDX(manifest.name || req.repo.fullName, manifest.version, tree);
+    const cycloneDX = sbomEngine.toCycloneDX(parsedManifest?.name || req.repo.fullName, parsedManifest?.version, tree);
 
     const [vulnerabilities, maliciousPackages] = await Promise.all([
       vulnEngine.correlateComponents(tree.components, ecosystem),
@@ -74,7 +103,13 @@ router.post('/sbom-submit', express.json({ limit: '5mb' }), authenticateApiKey, 
       integrityVerdict = buildIntegrity.verifyBuildIntegrity(ciConfigContent, ciConfigBaselineHash);
     }
 
-    const scanResult = { vulnerabilities, maliciousPackages };
+    const scanResult = {
+      vulnerabilities,
+      maliciousPackages,
+      components: tree.components,
+      manifestCorrupted,
+      parseError,
+    };
     const gate = policyGate.evaluateGate(scanResult, req.repo.policy, integrityVerdict);
 
     // Persist

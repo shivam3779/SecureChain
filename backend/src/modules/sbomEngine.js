@@ -36,6 +36,28 @@ function resolveVersion(meta) {
 }
 
 /**
+ * Regex fallback extractor to extract "package": "version" pairs from corrupt or malformed JSON text.
+ */
+function extractDependenciesFromCorruptJson(rawContent) {
+  if (typeof rawContent !== 'string') return {};
+  const deps = {};
+  const regex = /["'](@?[a-zA-Z0-9_.\-]+(?:\/[a-zA-Z0-9_.\-]+)?)["']\s*:\s*["']([^"'\r\n]+)["']/g;
+  const ignoreKeys = new Set([
+    'name', 'version', 'description', 'main', 'scripts', 'author', 'license',
+    'repository', 'bugs', 'homepage', 'type', 'private', 'keywords', 'module'
+  ]);
+  let match;
+  while ((match = regex.exec(rawContent)) !== null) {
+    const pkg = match[1].trim();
+    const ver = match[2].trim();
+    if (!ignoreKeys.has(pkg)) {
+      deps[pkg] = ver;
+    }
+  }
+  return deps;
+}
+
+/**
  * Recursively walks dependencies starting from a manifest's
  * `dependencies` + `devDependencies` map, querying the npm registry for
  * each package and its own declared dependencies.
@@ -44,6 +66,49 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
   const maxDepth = opts.maxDepth ?? 4;
   const components = new Map(); // key: name@version -> component record
   const edges = [];
+  const safeRootDeps = {};
+
+  // Validate dependency entries
+  if (rootDeps && typeof rootDeps === 'object') {
+    for (const [rawKey, rawVal] of Object.entries(rootDeps)) {
+      let isCorrupt = false;
+      const name = typeof rawKey === 'string' ? rawKey.trim() : String(rawKey || '');
+      if (!name || typeof rawKey !== 'string') {
+        isCorrupt = true;
+      }
+
+      let rawVer = rawVal;
+      if (typeof rawVal !== 'string') {
+        isCorrupt = true;
+        rawVer = rawVal != null ? JSON.stringify(rawVal) : '';
+      }
+
+      // Strip invalid characters from version string so OSV.dev and malware analyzer can evaluate
+      const cleanVersion = String(rawVer).replace(/[^0-9a-zA-Z.\-+]/g, '').trim() || '0.0.0';
+      if (!rawVer || rawVer !== cleanVersion) {
+        isCorrupt = true;
+      }
+
+      if (isCorrupt) {
+        const corruptKey = `${name || 'corrupt-entry'}@${cleanVersion}`;
+        components.set(corruptKey, {
+          name: name || 'corrupt-entry',
+          version: cleanVersion,
+          rawVersion: String(rawVal),
+          corruptEntry: true,
+          resolved: false,
+          purl: `pkg:npm/${name || 'corrupt-entry'}@${cleanVersion}`,
+          licence: 'UNKNOWN',
+          maintainers: [],
+          description: `Malformed manifest dependency entry (${rawKey}: ${rawVer})`,
+        });
+      }
+
+      if (name) {
+        safeRootDeps[name] = cleanVersion;
+      }
+    }
+  }
 
   async function walk(name, depth, parent) {
     if (depth > maxDepth) return;
@@ -66,7 +131,8 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
     }
     const version = resolveVersion(meta);
     const key = `${name}@${version}`;
-    if (components.has(key)) {
+    const existing = components.get(key);
+    if (existing && !existing.corruptEntry) {
       if (parent) edges.push({ from: parent, to: key });
       return;
     }
@@ -76,6 +142,7 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
       name,
       version,
       resolved: true,
+      corruptEntry: existing?.corruptEntry || false,
       purl: `pkg:npm/${name}@${version}`,
       licence: versionData.license || meta.license || 'UNKNOWN',
       maintainers: (meta.maintainers || []).map((m) => m.name),
@@ -91,7 +158,7 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
     await Promise.all(childNames.slice(0, 25).map((childName) => walk(childName, depth + 1, key)));
   }
 
-  const rootNames = Object.keys(rootDeps);
+  const rootNames = Object.keys(safeRootDeps);
   await Promise.all(rootNames.map((name) => walk(name, 0, null)));
 
   return { components: Array.from(components.values()), edges };
@@ -179,4 +246,11 @@ function diffSBOMs(previousComponents = [], currentComponents = []) {
   return { added, removed, changed };
 }
 
-module.exports = { fetchPackageMetadata, resolveDependencyTree, toCycloneDX, toSPDX, diffSBOMs };
+module.exports = {
+  fetchPackageMetadata,
+  resolveDependencyTree,
+  extractDependenciesFromCorruptJson,
+  toCycloneDX,
+  toSPDX,
+  diffSBOMs,
+};

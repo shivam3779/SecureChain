@@ -268,10 +268,42 @@ async function resolveFromManifest(filename, content, opts = {}) {
   const name = filename.toLowerCase();
 
   if (name === 'package.json') {
-    const { resolveDependencyTree } = require('./sbomEngine');
-    const manifest = JSON.parse(content);
-    const rootDeps = { ...(manifest.dependencies || {}), ...(manifest.devDependencies || {}) };
-    return { ecosystem: 'npm', manifest, ...(await resolveDependencyTree(rootDeps, opts)) };
+    const { resolveDependencyTree, extractDependenciesFromCorruptJson } = require('./sbomEngine');
+    let manifest = null;
+    let manifestCorrupted = false;
+    let parseError = null;
+
+    try {
+      manifest = typeof content === 'string' ? JSON.parse(content) : content;
+    } catch (err) {
+      manifestCorrupted = true;
+      parseError = err.message;
+    }
+
+    let rootDeps = {};
+    if (!manifestCorrupted && manifest && typeof manifest === 'object') {
+      const deps = typeof manifest.dependencies === 'object' && manifest.dependencies !== null ? manifest.dependencies : {};
+      const devDeps = typeof manifest.devDependencies === 'object' && manifest.devDependencies !== null ? manifest.devDependencies : {};
+      rootDeps = { ...deps, ...devDeps };
+    }
+
+    if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
+      const fallback = extractDependenciesFromCorruptJson(typeof content === 'string' ? content : JSON.stringify(content));
+      if (Object.keys(fallback).length > 0) {
+        rootDeps = { ...rootDeps, ...fallback };
+        manifestCorrupted = true;
+        if (!parseError) parseError = 'Invalid or unparseable dependency structure in manifest';
+      }
+    }
+
+    const tree = await resolveDependencyTree(rootDeps, opts);
+    return {
+      ecosystem: 'npm',
+      manifest,
+      manifestCorrupted,
+      parseError,
+      ...tree,
+    };
   }
 
   if (name === 'requirements.txt' || name === 'requirements.in') {
