@@ -79,7 +79,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 py-4 border-b border-slate-100">
         <div className="flex items-center gap-2.5">
-          <img src="/logo.png" alt="SecureChain Logo" className="w-16 h-16 object-contain" />
+          <img src="/logo.png" alt="SecureChain Logo" className="w-12 h-12 object-contain" />
           <div>
             <div className="text-sm font-bold text-slate-900 font-['Space_Grotesk'] tracking-tight">SecureChain</div>
             <div className="flex items-center gap-1.5 mt-0.5">

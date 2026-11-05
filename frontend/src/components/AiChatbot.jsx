@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   AlertTriangle,
   Terminal,
-  ExternalLink,
   ChevronRight,
   ShieldAlert
 } from 'lucide-react';

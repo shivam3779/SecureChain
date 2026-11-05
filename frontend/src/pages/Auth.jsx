@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../lib/api';
-import { Badge, Spinner } from '../components/ui';
-import { Mail, Lock, User, ArrowRight, Eye, EyeOff, ShieldCheck, Check } from 'lucide-react';
+import { Spinner } from '../components/ui';
+import { Mail, Lock, User, ArrowRight, Eye, EyeOff, Check } from 'lucide-react';
 
 export function LoginPage() {
   const { user, loading, login: authLogin } = useAuth();

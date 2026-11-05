@@ -9,7 +9,7 @@ const vulnEngine = require('../modules/vulnerabilityEngine');
 const malwareAnalyzer = require('../modules/maliciousPackageAnalyzer');
 const buildIntegrity = require('../modules/buildIntegrity');
 const policyGate = require('../modules/policyGate');
-const { requireAuth, authenticateToken, requireAdmin, requireRole, checkRole, requireOperationalRole, blockViewers, isRepoAuthorized, getAllowedRepoIds } = require('../middleware/auth');
+const { requireAuth, authenticateToken, requireAdmin, requireOperationalRole, isRepoAuthorized, getAllowedRepoIds } = require('../middleware/auth');
 const notifications = require('../modules/notificationService');
 const { db, uuid, saveUser } = require('../db/store');
 const bcrypt = require('bcryptjs');
@@ -25,7 +25,6 @@ router.get('/auth/github', (req, res) => {
 // Builds a GitHub OAuth URL that carries the current user's session token
 // in the state param so the callback knows which account to link to.
 router.get('/auth/github/link', requireAuth, (req, res) => {
-  const jwt = require('jsonwebtoken');
   // Embed the current user's sub into state so callback can find them
   const state = jwt.sign(
     { sub: req.user.sub, mode: 'link' },

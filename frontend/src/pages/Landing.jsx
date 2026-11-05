@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LaserBlockScanner from '../components/LaserBlockScanner';
-import { Button, Badge } from '../components/ui';
 import { api } from '../lib/api';
 
 // ── Animated Threat & Scan Counter (Original SecureChain Metrics) ──────────────

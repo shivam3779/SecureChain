@@ -1,20 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 
-const PRIMARY_STACKS = [
-  { id: 'Node.js (npm)', label: 'Node.js / npm', icon: '⚡' },
-  { id: 'Python (PyPI)', label: 'Python / PyPI', icon: '🐍' },
-  { id: 'Go Modules', label: 'Go Modules', icon: '🐹' },
-  { id: 'Java (Maven)', label: 'Java / Maven', icon: '☕' },
-  { id: 'Docker', label: 'Docker / Containers', icon: '🐳' },
-];
-
-const SCAN_FREQUENCIES = [
-  { id: 'realtime', label: 'Continuous', desc: 'On commit & PR' },
-  { id: 'daily', label: 'Daily', desc: 'Scheduled scan' },
-  { id: 'ondemand', label: 'Manual', desc: 'On-demand' },
-];
-
 const TEAM_CATEGORIES = [
   'FinTech & Banking',
   'Cybersecurity & Defense',
@@ -37,8 +23,6 @@ export default function OnboardingModal({ onComplete }) {
   // Solo state
   const [projectTitle, setProjectTitle] = useState('');
   const [projectIntro, setProjectIntro] = useState('');
-  const [primaryStack, setPrimaryStack] = useState('Node.js (npm)');
-  const [scanFrequency, setScanFrequency] = useState('realtime');
 
   // Team Create state
   const [teamName, setTeamName] = useState('');
@@ -92,8 +76,8 @@ export default function OnboardingModal({ onComplete }) {
         mode: 'solo',
         projectTitle: projectTitle.trim(),
         projectIntro: projectIntro.trim(),
-        primaryStack,
-        scanFrequency,
+        primaryStack: 'Node.js (npm)',
+        scanFrequency: 'realtime',
       });
       onComplete({ mode: 'solo', soloProject: res.soloProject });
     } catch (e) {
