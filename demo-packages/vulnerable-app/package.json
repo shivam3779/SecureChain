@@ -1,0 +1,13 @@
+{
+  "name": "demo-vulnerable-service",
+  "version": "1.0.0",
+  "description": "Demo service containing real-world high-severity CVEs and typosquatting for SecureChain demonstration",
+  "dependencies": {
+    "express": "4.16.0",
+    "lodash": "4.17.15",
+    "axios": "0.21.1",
+    "jsonwebtoken": "8.5.1",
+    "minimist": "1.2.0",
+    "lodahs": "1.0.0"
+  }
+}

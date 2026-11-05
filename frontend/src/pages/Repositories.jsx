@@ -82,6 +82,30 @@ function RepoCard({ repo, onScan, onDelete, scanning, scanResult }) {
   );
 }
 
+const DEMO_VULNERABLE = JSON.stringify({
+  name: 'demo-vulnerable-service',
+  version: '1.0.0',
+  dependencies: {
+    express: '4.16.0',
+    lodash: '4.17.15',
+    axios: '0.21.1',
+    jsonwebtoken: '8.5.1',
+    minimist: '1.2.0',
+    lodahs: '1.0.0',
+  },
+}, null, 2);
+
+const DEMO_CLEAN = JSON.stringify({
+  name: 'demo-clean-service',
+  version: '1.0.0',
+  dependencies: {
+    express: '^4.21.0',
+    lodash: '^4.17.21',
+    axios: '^1.7.7',
+    jsonwebtoken: '^9.0.2',
+  },
+}, null, 2);
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Repositories() {
   const { user, refresh } = useAuth();
@@ -381,10 +405,36 @@ export default function Repositories() {
           <Card className="p-5 space-y-3.5">
             <div className="flex items-center justify-between">
               <SectionLabel>Scan Manifest</SectionLabel>
-              <label className="cursor-pointer text-xs font-medium text-slate-700 hover:text-slate-900 flex items-center gap-1.5 border border-slate-200 rounded-md px-2.5 py-1 hover:bg-slate-50 transition-colors shadow-2xs">
-                <span>📁 Upload package.json</span>
-                <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} />
-              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManifestProject('demo-vulnerable-service');
+                    setManifestText(DEMO_VULNERABLE);
+                    setManifestResult(null);
+                  }}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer"
+                  title="Loads demo package with real CVEs and typosquatting"
+                >
+                  ⚡ Vulnerable Demo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManifestProject('demo-clean-service');
+                    setManifestText(DEMO_CLEAN);
+                    setManifestResult(null);
+                  }}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer"
+                  title="Loads clean demo package"
+                >
+                  🛡️ Clean Demo
+                </button>
+                <label className="cursor-pointer text-xs font-medium text-slate-700 hover:text-slate-900 flex items-center gap-1.5 border border-slate-200 rounded-md px-2.5 py-1 hover:bg-slate-50 transition-colors shadow-2xs">
+                  <span>📁 Upload JSON</span>
+                  <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} />
+                </label>
+              </div>
             </div>
 
             <input

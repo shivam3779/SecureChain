@@ -1,0 +1,11 @@
+{
+  "name": "demo-clean-service",
+  "version": "1.0.0",
+  "description": "Secure microservice passing zero-trust policy gate with clean dependencies",
+  "dependencies": {
+    "express": "^4.21.0",
+    "lodash": "^4.17.21",
+    "axios": "^1.7.7",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
