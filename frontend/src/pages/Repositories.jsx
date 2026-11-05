@@ -99,10 +99,11 @@ const DEMO_CLEAN = JSON.stringify({
   name: 'demo-clean-service',
   version: '1.0.0',
   dependencies: {
-    express: '^4.21.0',
-    lodash: '^4.17.21',
-    axios: '^1.7.7',
-    jsonwebtoken: '^9.0.2',
+    zod: '3.23.8',
+    nanoid: '5.0.7',
+    clsx: '2.1.1',
+    picocolors: '1.1.0',
+    'tiny-invariant': '1.3.3',
   },
 }, null, 2);
 
