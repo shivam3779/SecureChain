@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOperationalRole } = require('../middleware/auth');
 const ai = require('../modules/aiThreatEngine');
 const { getModelInfo } = require('../modules/mlClassifier');
 const { db } = require('../db/store');
@@ -21,7 +21,7 @@ function requireAiKey(req, res, next) {
 }
 
 // ── 1. Explain a vulnerability in plain English ───────────────────────────────
-router.post('/ai/explain', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/explain', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { finding } = req.body;
   if (!finding) return res.status(400).json({ error: '`finding` object required' });
   try {
@@ -33,7 +33,7 @@ router.post('/ai/explain', requireAuth, requireAiKey, async (req, res) => {
 });
 
 // ── 2. Explain (streaming SSE) — for the dashboard typing animation ──────────
-router.post('/ai/explain/stream', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/explain/stream', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { finding } = req.body;
   if (!finding) return res.status(400).json({ error: '`finding` object required' });
   try {
@@ -44,7 +44,7 @@ router.post('/ai/explain/stream', requireAuth, requireAiKey, async (req, res) =>
 });
 
 // ── 3. Classify threat + MITRE ATT&CK mapping ────────────────────────────────
-router.post('/ai/classify', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/classify', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { finding } = req.body;
   if (!finding) return res.status(400).json({ error: '`finding` object required' });
   try {
@@ -56,7 +56,7 @@ router.post('/ai/classify', requireAuth, requireAiKey, async (req, res) => {
 });
 
 // ── 4. Remediation recommendation ────────────────────────────────────────────
-router.post('/ai/remediate', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/remediate', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { finding, sbomContext } = req.body;
   if (!finding) return res.status(400).json({ error: '`finding` object required' });
   try {
@@ -68,7 +68,7 @@ router.post('/ai/remediate', requireAuth, requireAiKey, async (req, res) => {
 });
 
 // ── 5. Root cause analysis ────────────────────────────────────────────────────
-router.post('/ai/root-cause', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/root-cause', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { finding, dependencyChain } = req.body;
   if (!finding) return res.status(400).json({ error: '`finding` object required' });
   try {
@@ -113,7 +113,7 @@ router.get('/ai/predict-risk/:repoId', requireAuth, requireAiKey, async (req, re
 });
 
 // ── 7. AI Security Chatbot (conversational, multi-turn) ───────────────────────
-router.post('/ai/chat', requireAuth, requireAiKey, async (req, res) => {
+router.post('/ai/chat', requireAuth, requireOperationalRole, requireAiKey, async (req, res) => {
   const { messages, repoId } = req.body;
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: '`messages` array required' });

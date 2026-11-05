@@ -57,10 +57,18 @@ function extractDependenciesFromCorruptJson(rawContent) {
   return deps;
 }
 
+function cleanSemanticVersion(ver) {
+  if (!ver || typeof ver !== 'string') return '0.0.0';
+  const trimmed = ver.trim();
+  const match = trimmed.match(/^[\^~v=><\s]*([0-9]+(?:\.[0-9]+)*(?:-[a-zA-Z0-9.]+)?)/);
+  if (match) return match[1];
+  return trimmed.replace(/[^0-9a-zA-Z.\-+]/g, '') || '0.0.0';
+}
+
 /**
  * Recursively walks dependencies starting from a manifest's
- * `dependencies` + `devDependencies` map, querying the npm registry for
- * each package and its own declared dependencies.
+ * `dependencies` + `devDependencies` + `peerDependencies` + `optionalDependencies` map,
+ * querying the npm registry for each package and its own declared dependencies.
  */
 async function resolveDependencyTree(rootDeps, opts = {}) {
   const maxDepth = opts.maxDepth ?? 4;
@@ -78,26 +86,27 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
       }
 
       let rawVer = rawVal;
-      if (typeof rawVal !== 'string') {
-        isCorrupt = true;
-        rawVer = rawVal != null ? JSON.stringify(rawVal) : '';
-      }
+      const rawStr = String(rawVal != null ? rawVal : '');
+      const strippedVersion = rawStr.replace(/[^0-9a-zA-Z.\-+]/g, '').trim() || '0.0.0';
+      const cleanVer = cleanSemanticVersion(rawStr);
 
-      // Strip invalid characters from version string so OSV.dev and malware analyzer can evaluate
-      const cleanVersion = String(rawVer).replace(/[^0-9a-zA-Z.\-+]/g, '').trim() || '0.0.0';
-      if (!rawVer || rawVer !== cleanVersion) {
+      if (
+        typeof rawVal !== 'string' ||
+        /[;{}()$"'\r\n\t]|\b(drop|table|select|insert|delete|curl|bash)\b/i.test(rawStr)
+      ) {
         isCorrupt = true;
+        rawVer = rawVal != null ? (typeof rawVal === 'string' ? rawVal : JSON.stringify(rawVal)) : '';
       }
 
       if (isCorrupt) {
-        const corruptKey = `${name || 'corrupt-entry'}@${cleanVersion}`;
+        const corruptKey = `${name || 'corrupt-entry'}@${strippedVersion}`;
         components.set(corruptKey, {
           name: name || 'corrupt-entry',
-          version: cleanVersion,
+          version: strippedVersion,
           rawVersion: String(rawVal),
           corruptEntry: true,
           resolved: false,
-          purl: `pkg:npm/${name || 'corrupt-entry'}@${cleanVersion}`,
+          purl: `pkg:npm/${name || 'corrupt-entry'}@${strippedVersion}`,
           licence: 'UNKNOWN',
           maintainers: [],
           description: `Malformed manifest dependency entry (${rawKey}: ${rawVer})`,
@@ -105,31 +114,22 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
       }
 
       if (name) {
-        safeRootDeps[name] = cleanVersion;
+        safeRootDeps[name] = cleanVer;
       }
     }
   }
 
-  async function walk(name, depth, parent) {
+  async function walk(name, depth, parent, targetVersion = null) {
     if (depth > maxDepth) return;
     const meta = await fetchPackageMetadata(name);
-    if (!meta) {
-      const key = `${name}@unresolved`;
-      if (!components.has(key)) {
-        components.set(key, {
-          name,
-          version: 'unresolved',
-          resolved: false,
-          purl: `pkg:npm/${name}`,
-          licence: null,
-          maintainers: [],
-          publishDate: null,
-          description: null,
-        });
-      }
-      return;
+    let version = targetVersion && targetVersion !== '*' && targetVersion !== 'latest' ? targetVersion : null;
+    if (!version && meta) {
+      version = resolveVersion(meta);
     }
-    const version = resolveVersion(meta);
+    if (!version) {
+      version = targetVersion || 'unresolved';
+    }
+
     const key = `${name}@${version}`;
     const existing = components.get(key);
     if (existing && !existing.corruptEntry) {
@@ -137,29 +137,51 @@ async function resolveDependencyTree(rootDeps, opts = {}) {
       return;
     }
 
-    const versionData = (meta.versions && meta.versions[version]) || {};
+    if (!meta && version === 'unresolved') {
+      components.set(key, {
+        name,
+        version: 'unresolved',
+        resolved: false,
+        purl: `pkg:npm/${name}`,
+        licence: null,
+        maintainers: [],
+        publishDate: null,
+        description: null,
+      });
+      return;
+    }
+
+    const versionData = (meta?.versions && meta.versions[version]) || {};
     components.set(key, {
       name,
       version,
-      resolved: true,
+      resolved: version !== 'unresolved',
       corruptEntry: existing?.corruptEntry || false,
       purl: `pkg:npm/${name}@${version}`,
-      licence: versionData.license || meta.license || 'UNKNOWN',
-      maintainers: (meta.maintainers || []).map((m) => m.name),
-      publishDate: (meta.time && meta.time[version]) || null,
-      description: meta.description || versionData.description || '',
+      licence: versionData.license || meta?.license || 'UNKNOWN',
+      maintainers: (meta?.maintainers || []).map((m) => m.name),
+      publishDate: (meta?.time && meta.time[version]) || null,
+      description: meta?.description || versionData.description || '',
       hasInstallScripts: !!(versionData.scripts && (versionData.scripts.postinstall || versionData.scripts.preinstall)),
     });
     if (parent) edges.push({ from: parent, to: key });
 
-    const childDeps = versionData.dependencies || {};
-    const childNames = Object.keys(childDeps);
+    const childDeps = {
+      ...(versionData.dependencies || {}),
+      ...(versionData.peerDependencies || {}),
+      ...(versionData.optionalDependencies || {}),
+    };
+    const childEntries = Object.entries(childDeps);
     // Bound fan-out so a single scan doesn't explode into thousands of calls
-    await Promise.all(childNames.slice(0, 25).map((childName) => walk(childName, depth + 1, key)));
+    await Promise.all(
+      childEntries.slice(0, 25).map(([childName, childVerSpec]) =>
+        walk(childName, depth + 1, key, cleanSemanticVersion(childVerSpec))
+      )
+    );
   }
 
   const rootNames = Object.keys(safeRootDeps);
-  await Promise.all(rootNames.map((name) => walk(name, 0, null)));
+  await Promise.all(rootNames.map((name) => walk(name, 0, null, safeRootDeps[name])));
 
   return { components: Array.from(components.values()), edges };
 }
@@ -246,10 +268,61 @@ function diffSBOMs(previousComponents = [], currentComponents = []) {
   return { added, removed, changed };
 }
 
+/**
+ * Generate full SBOM from manifest content (string or object)
+ */
+async function generateSBOM(manifestContent, projectName = 'app', opts = {}) {
+  let parsedManifest = null;
+  let manifestCorrupted = false;
+  let parseError = null;
+
+  try {
+    parsedManifest = typeof manifestContent === 'string' ? JSON.parse(manifestContent) : manifestContent;
+  } catch (err) {
+    manifestCorrupted = true;
+    parseError = err.message;
+  }
+
+  let rootDeps = {};
+  if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
+    const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
+    const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
+    const peerDeps = typeof parsedManifest.peerDependencies === 'object' && parsedManifest.peerDependencies !== null ? parsedManifest.peerDependencies : {};
+    const optDeps = typeof parsedManifest.optionalDependencies === 'object' && parsedManifest.optionalDependencies !== null ? parsedManifest.optionalDependencies : {};
+    rootDeps = { ...deps, ...devDeps, ...peerDeps, ...optDeps };
+  }
+
+  if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
+    const rawText = typeof manifestContent === 'string' ? manifestContent : JSON.stringify(manifestContent);
+    const fallbackDeps = extractDependenciesFromCorruptJson(rawText);
+    if (Object.keys(fallbackDeps).length > 0) {
+      rootDeps = { ...rootDeps, ...fallbackDeps };
+      manifestCorrupted = true;
+      if (!parseError) parseError = 'Manifest dependency structure invalid or unparseable';
+    }
+  }
+
+  const tree = await resolveDependencyTree(rootDeps, opts);
+  const cycloneDX = toCycloneDX(parsedManifest?.name || projectName, parsedManifest?.version, tree);
+  const spdx = toSPDX(parsedManifest?.name || projectName, parsedManifest?.version, tree);
+
+  return {
+    manifest: parsedManifest,
+    manifestCorrupted,
+    parseError,
+    tree,
+    components: tree.components,
+    cycloneDX,
+    spdx,
+  };
+}
+
 module.exports = {
   fetchPackageMetadata,
+  cleanSemanticVersion,
   resolveDependencyTree,
   extractDependenciesFromCorruptJson,
+  generateSBOM,
   toCycloneDX,
   toSPDX,
   diffSBOMs,

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Production build
+dist/
+frontend/dist/
+
+# Environment files & Secrets
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+
+# Local database
+backend/src/db/*.db.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

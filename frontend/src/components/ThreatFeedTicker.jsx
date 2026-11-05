@@ -12,7 +12,7 @@ export default function ThreatFeedTicker() {
       <div className="flex-1 overflow-hidden relative">
         {events.length === 0 ? (
           <span className="px-4 text-[11px] font-mono text-slate-500">
-            {connected ? 'Monitoring global threat sources — continuous SBOM feed active' : 'Connecting to threat feed…'}
+            {connected ? 'Continuous threat monitoring active' : 'Connecting to threat feed…'}
           </span>
         ) : (
           <div className="flex animate-[scroll_20s_linear_infinite] gap-16 whitespace-nowrap">

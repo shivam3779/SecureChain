@@ -71,7 +71,7 @@ export function MaliciousPackages() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">Malicious Packages</h1>
-          <p className="text-slate-500 text-sm mt-1">Typosquat detection (Levenshtein distance) + behavioral heuristics.</p>
+          <p className="text-slate-500 text-sm mt-1">Typosquats and anomalous package behavior detection.</p>
         </div>
         <Badge variant={findings.length > 0 ? 'critical' : 'safe'}>
           {findings.length} findings
@@ -190,7 +190,7 @@ export function CicdPage() {
     <div className="space-y-6 w-full">
       <div>
         <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">CI/CD Security</h1>
-        <p className="text-slate-500 text-sm mt-1">Pipeline plugins, policy gates, SHA-256 build integrity.</p>
+        <p className="text-slate-500 text-sm mt-1">Pipeline policy gates and SHA-256 build integrity.</p>
       </div>
       <ErrorBanner message={err} />
 
@@ -199,7 +199,7 @@ export function CicdPage() {
         <Card className="p-5 bg-white border border-slate-200 shadow-xs flex flex-col justify-between">
           <div>
             <SectionLabel>CI API key</SectionLabel>
-            <p className="text-xs text-slate-500 mt-2 mb-3">Store this as <code className="font-mono bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded border border-slate-200">SECURECHAIN_API_KEY</code> in your CI provider's secrets. The pipeline CLI uses it to submit SBOMs.</p>
+            <p className="text-xs text-slate-500 mt-1.5 mb-3">Add to CI provider secrets as <code className="font-mono bg-slate-100 text-slate-800 px-1 py-0.5 rounded border border-slate-200">SECURECHAIN_API_KEY</code>.</p>
             <div className="flex gap-2 mb-3">
               <select
                 value={repoId}
@@ -224,12 +224,12 @@ export function CicdPage() {
         {/* Build integrity */}
         <Card className="p-5 bg-white border border-slate-200 shadow-xs">
           <SectionLabel>Build script integrity (SHA-256)</SectionLabel>
-          <p className="text-xs text-slate-500 mt-2 mb-3">Paste your CI config content. Set a baseline once, then verify on every run.</p>
+          <p className="text-xs text-slate-500 mt-1.5 mb-3">Verify CI workflow configuration against baseline.</p>
           <textarea
             value={buildContent}
             onChange={e => setBuildContent(e.target.value)}
             rows={4}
-            placeholder="Paste .github/workflows/ci.yml content here…"
+            placeholder="Paste workflow YAML (e.g. .github/workflows/ci.yml)"
             className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-slate-900/10 focus:border-slate-800 font-mono resize-none mb-3 shadow-inner"
           />
           <div className="flex gap-2 mb-3">
@@ -390,7 +390,7 @@ export function AlertsPage() {
         <div>
           <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">Alert Channels</h1>
           <p className="text-slate-500 text-sm mt-1">
-            P0 critical vulnerabilities automatically trigger Jira & PagerDuty. High findings and policy violations notify Slack & Email.
+            Automated alerts for high and critical security events.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -638,7 +638,20 @@ export function CompliancePage() {
   const [selectedRepoId, setSelectedRepoId] = useState(repoIdParam || '');
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [err, setErr] = useState('');
+
+  async function handleDownloadCompliance() {
+    if (!selectedRepoId) return;
+    try {
+      setDownloading(true);
+      await api.downloadCompliance(selectedRepoId);
+    } catch (e) {
+      setErr(e.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   useEffect(() => {
     api.connectedRepos()
@@ -686,12 +699,17 @@ export function CompliancePage() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900 tracking-tight">Compliance</h1>
-          <p className="text-slate-500 text-sm mt-1">SLSA · NIST SSDF · OWASP — generated live from your scan data.</p>
+          <p className="text-slate-500 text-sm mt-1">Live SLSA, NIST SSDF, and OWASP audit verification.</p>
         </div>
         {report && selectedRepoId && (
-          <a href={api.downloadComplianceUrl(selectedRepoId)} download target="_blank" rel="noreferrer">
-            <Button size="sm" variant="ghost">↓ Download JSON</Button>
-          </a>
+          <Button
+            size="sm"
+            variant="ghost"
+            loading={downloading}
+            onClick={handleDownloadCompliance}
+          >
+            ↓ Download JSON
+          </Button>
         )}
       </div>
 
@@ -875,8 +893,15 @@ export function AdminPage() {
 
   async function invite() {
     if (!inviteEmail) return;
+    setErr('');
     try {
-      const r = await api.adminInvite(inviteEmail, inviteRole, teamInfo?.org?.id);
+      const token = localStorage.getItem('securechain_token');
+      const r = await api.adminInvite(
+        inviteEmail,
+        inviteRole,
+        teamInfo?.org?.id,
+        token ? { Authorization: `Bearer ${token}` } : {}
+      );
       const link = `${window.location.origin}${r.inviteLink}`;
       setInviteLink(link);
       setInviteEmail('');
@@ -898,7 +923,7 @@ export function AdminPage() {
   ];
 
   return (
-    <div className="space-y-6 w-full max-w-4xl">
+    <div className="space-y-6 w-full">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>

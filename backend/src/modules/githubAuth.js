@@ -63,8 +63,9 @@ async function fetchManifest(accessToken, owner, repo, manifestPath = 'package.j
 }
 
 function issueSessionToken(user) {
+  const role = (user.role || 'admin').toLowerCase();
   return jwt.sign(
-    { sub: String(user.id), login: user.login, avatar: user.avatar_url },
+    { sub: String(user.githubId || user.id), login: user.login, avatar: user.avatar || user.avatar_url, role },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );

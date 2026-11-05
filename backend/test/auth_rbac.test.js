@@ -1,8 +1,9 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { requireAuth, requireAdmin, requireRole } = require('../src/middleware/auth');
+const { requireAuth, authenticateToken, requireAdmin, requireRole, requireOperationalRole, blockViewers } = require('../src/middleware/auth');
 const adminLayer = require('../src/modules/adminLayer');
 const { db } = require('../src/db/store');
+const jwt = require('jsonwebtoken');
 
 describe('Auth & RBAC Enforcement', () => {
   test('requireAdmin rejects unauthenticated or non-admin requests with 403', () => {
@@ -41,6 +42,20 @@ describe('Auth & RBAC Enforcement', () => {
     requireAdmin({ user: { role: 'Admin' } }, res, () => { nextCalled = true; });
     assert.equal(statusCode, null);
     assert.equal(nextCalled, true);
+
+    // Case 5: Lowercase admin succeeds
+    nextCalled = false;
+    statusCode = null;
+    requireAdmin({ user: { role: 'admin' } }, res, () => { nextCalled = true; });
+    assert.equal(statusCode, null);
+    assert.equal(nextCalled, true);
+
+    // Case 6: Uppercase ADMIN succeeds
+    nextCalled = false;
+    statusCode = null;
+    requireAdmin({ user: { role: 'ADMIN' } }, res, () => { nextCalled = true; });
+    assert.equal(statusCode, null);
+    assert.equal(nextCalled, true);
   });
 
   test('requireRole enforces allowed role sets', () => {
@@ -68,6 +83,55 @@ describe('Auth & RBAC Enforcement', () => {
     // Admin always allowed
     passed = false;
     middleware({ user: { role: 'Admin' } }, res, () => { passed = true; });
+    assert.equal(passed, true);
+  });
+
+  test('requireOperationalRole blocks viewer and allows developer and admin', () => {
+    let passed = false;
+    let status = null;
+    let jsonBody = null;
+
+    const res = {
+      status(code) {
+        status = code;
+        return {
+          json(b) { jsonBody = b; }
+        };
+      }
+    };
+
+    // Case 1: Viewer blocked with 403
+    requireOperationalRole({ user: { role: 'Viewer' } }, res, () => { passed = true; });
+    assert.equal(status, 403);
+    assert.equal(passed, false);
+    assert.match(jsonBody?.error, /viewer/i);
+
+    // Case 2: Lowercase viewer blocked with 403
+    status = null;
+    passed = false;
+    requireOperationalRole({ user: { role: 'viewer' } }, res, () => { passed = true; });
+    assert.equal(status, 403);
+    assert.equal(passed, false);
+
+    // Case 3: Developer allowed
+    status = null;
+    passed = false;
+    requireOperationalRole({ user: { role: 'Developer' } }, res, () => { passed = true; });
+    assert.equal(status, null);
+    assert.equal(passed, true);
+
+    // Case 4: Admin allowed
+    status = null;
+    passed = false;
+    requireOperationalRole({ user: { role: 'Admin' } }, res, () => { passed = true; });
+    assert.equal(status, null);
+    assert.equal(passed, true);
+
+    // Case 5: SecurityAnalyst and DevOpsEngineer allowed
+    status = null;
+    passed = false;
+    requireOperationalRole({ user: { role: 'SecurityAnalyst' } }, res, () => { passed = true; });
+    assert.equal(status, null);
     assert.equal(passed, true);
   });
 
@@ -107,5 +171,47 @@ describe('Auth & RBAC Enforcement', () => {
       db.data.users = originalUsers;
       await db.write();
     }
+  });
+
+  test('authenticateToken middleware correctly verifies bearer token and rejects missing token', () => {
+    process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-123';
+    const validToken = jwt.sign({ sub: 'user-123', login: 'alice', role: 'developer' }, process.env.JWT_SECRET);
+
+    let status = null;
+    let jsonBody = null;
+    let nextCalled = false;
+
+    const res = {
+      status(code) {
+        status = code;
+        return { json(b) { jsonBody = b; } };
+      }
+    };
+
+    // Case 1: Missing token returns 401 Missing bearer token
+    authenticateToken({ headers: {} }, res, () => { nextCalled = true; });
+    assert.equal(status, 401);
+    assert.equal(jsonBody?.error, 'Missing bearer token');
+    assert.equal(nextCalled, false);
+
+    // Case 2: Valid Authorization: Bearer <token> passes
+    status = null;
+    jsonBody = null;
+    nextCalled = false;
+    const req = { headers: { authorization: `Bearer ${validToken}` } };
+    authenticateToken(req, res, () => { nextCalled = true; });
+    assert.equal(status, null);
+    assert.equal(nextCalled, true);
+    assert.equal(req.user.sub, 'user-123');
+
+    // Case 3: Fallback query parameter ?token=<token> passes
+    status = null;
+    jsonBody = null;
+    nextCalled = false;
+    const reqQuery = { headers: {}, query: { token: validToken } };
+    authenticateToken(reqQuery, res, () => { nextCalled = true; });
+    assert.equal(status, null);
+    assert.equal(nextCalled, true);
+    assert.equal(reqQuery.user.sub, 'user-123');
   });
 });

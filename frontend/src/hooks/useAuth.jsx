@@ -37,8 +37,8 @@ export function AuthProvider({ children }) {
   const logout = () => {
     clearToken();
     setUser(null);
-    // Replace history so the back button can't return to the dashboard
-    window.location.replace('/login');
+    // Directly redirect to landing page
+    window.location.replace('/');
   };
 
   return <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>{children}</AuthContext.Provider>;

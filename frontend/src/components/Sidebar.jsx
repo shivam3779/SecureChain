@@ -23,8 +23,8 @@ function UserAvatar({ src, name, provider, size = 28 }) {
   const badge = provider === 'google'
     ? { bg: '#4285F4', label: 'G' }
     : provider === 'github'
-    ? { bg: '#24292e', label: '⌥' }
-    : null;
+      ? { bg: '#24292e', label: '⌥' }
+      : null;
 
   const dim = `${size}px`;
 
@@ -59,15 +59,15 @@ function UserAvatar({ src, name, provider, size = 28 }) {
 }
 
 const NAV = [
-  { to: '/dashboard',            icon: '⬡', label: 'Overview' },
-  { to: '/dashboard/repos',      icon: '⊞', label: 'Repositories' },
-  { to: '/dashboard/sbom',       icon: '◫', label: 'SBOM' },
-  { to: '/dashboard/vulns',      icon: '◈', label: 'Vulnerabilities' },
-  { to: '/dashboard/malware',    icon: '◬', label: 'Malicious Pkgs' },
-  { to: '/dashboard/cicd',       icon: '⊙', label: 'CI/CD' },
-  { to: '/dashboard/alerts',     icon: '◎', label: 'Alerts' },
+  { to: '/dashboard', icon: '⬡', label: 'Overview' },
+  { to: '/dashboard/repos', icon: '⊞', label: 'Repositories' },
+  { to: '/dashboard/sbom', icon: '◫', label: 'SBOM' },
+  { to: '/dashboard/vulns', icon: '◈', label: 'Vulnerabilities' },
+  { to: '/dashboard/malware', icon: '◬', label: 'Malicious Pkgs' },
+  { to: '/dashboard/cicd', icon: '⊙', label: 'CI/CD' },
+  { to: '/dashboard/alerts', icon: '◎', label: 'Alerts' },
   { to: '/dashboard/compliance', icon: '◻', label: 'Compliance' },
-  { to: '/dashboard/admin',      icon: '◧', label: 'Admin' },
+  { to: '/dashboard/admin', icon: '◧', label: 'Admin' },
 ];
 
 export default function Sidebar() {
@@ -79,9 +79,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 py-4 border-b border-slate-100">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-slate-900 flex items-center justify-center shadow-xs">
-            <span className="text-white text-xs font-black">SC</span>
-          </div>
+          <img src="/logo.png" alt="SecureChain Logo" className="w-16 h-16 object-contain" />
           <div>
             <div className="text-sm font-bold text-slate-900 font-['Space_Grotesk'] tracking-tight">SecureChain</div>
             <div className="flex items-center gap-1.5 mt-0.5">
@@ -100,10 +98,9 @@ export default function Sidebar() {
             to={to}
             end={to === '/dashboard'}
             className={({ isActive }) =>
-              `group flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs transition-all duration-150 relative ${
-                isActive
-                  ? 'text-slate-900 bg-slate-100 font-semibold shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 font-medium'
+              `group flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs transition-all duration-150 relative ${isActive
+                ? 'text-slate-900 bg-slate-100 font-semibold shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 font-medium'
               }`
             }
           >

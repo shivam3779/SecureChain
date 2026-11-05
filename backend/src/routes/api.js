@@ -9,7 +9,7 @@ const vulnEngine = require('../modules/vulnerabilityEngine');
 const malwareAnalyzer = require('../modules/maliciousPackageAnalyzer');
 const buildIntegrity = require('../modules/buildIntegrity');
 const policyGate = require('../modules/policyGate');
-const { requireAuth, isRepoAuthorized, getAllowedRepoIds } = require('../middleware/auth');
+const { requireAuth, authenticateToken, requireAdmin, requireRole, checkRole, requireOperationalRole, blockViewers, isRepoAuthorized, getAllowedRepoIds } = require('../middleware/auth');
 const notifications = require('../modules/notificationService');
 const { db, uuid, saveUser } = require('../db/store');
 const bcrypt = require('bcryptjs');
@@ -57,12 +57,11 @@ router.get('/auth/google/callback', async (req, res) => {
     if (!code) return res.status(400).json({ error: 'Missing code' });
     const tokens = await google.exchangeCodeForTokens(code);
     const googleUser = await google.fetchGoogleUser(tokens.access_token);
-    const sessionToken = google.issueSessionToken(googleUser);
-
     await db.read();
     const googleId = `google:${googleUser.id}`;
     let user = db.data.users.find(u => u.googleId === googleId);
     if (!user) {
+      const isFirst = (db.data.users || []).length === 0;
       user = {
         id: uuid(),
         googleId,
@@ -70,13 +69,15 @@ router.get('/auth/google/callback', async (req, res) => {
         email: googleUser.email,
         avatar: googleUser.picture,
         name: googleUser.name,
-        role: 'Developer',
+        role: isFirst ? 'admin' : 'Developer',
         provider: 'google',
         createdAt: new Date().toISOString(),
       };
       db.data.users.push(user);
     }
     await db.write();
+
+    const sessionToken = google.issueSessionToken(user);
     res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${sessionToken}`);
   } catch (err) {
     res.status(500).json({ error: 'Google OAuth exchange failed', detail: err.message });
@@ -122,7 +123,6 @@ router.get('/auth/github/callback', async (req, res) => {
     }
 
     // ── NORMAL LOGIN MODE ─────────────────────────────────────────────────────
-    const sessionToken = github.issueSessionToken(ghUser);
     let user = db.data.users.find((u) => u.githubId === ghUser.id);
     if (!user) {
       user = {
@@ -133,7 +133,7 @@ router.get('/auth/github/callback', async (req, res) => {
         email: ghUser.email || null,
         avatar: ghUser.avatar_url,
         provider: 'github',
-        role: 'Admin',
+        role: (db.data.users || []).length === 0 ? 'admin' : 'Developer',
         githubAccessToken: accessToken,
         createdAt: new Date().toISOString(),
       };
@@ -144,10 +144,11 @@ router.get('/auth/github/callback', async (req, res) => {
       user.avatar = ghUser.avatar_url;          // keep in sync with GitHub
       user.name   = ghUser.name || ghUser.login;
       user.provider = 'github';
+      if (user.role && user.role.toLowerCase() === 'admin') user.role = 'admin';
     }
     await db.write();
 
-
+    const sessionToken = github.issueSessionToken(user);
     res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${sessionToken}`);
   } catch (err) {
     res.status(500).json({ error: 'GitHub OAuth exchange failed', detail: err.message });
@@ -261,14 +262,16 @@ router.post('/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
+    const userRole = (user.role || 'developer').toLowerCase();
     const sessionToken = jwt.sign(
-      { sub: user.id, email: user.email, name: user.name, role: user.role, provider: user.provider || 'email' },
+      { sub: user.id, email: user.email, name: user.name, role: userRole, provider: user.provider || 'email' },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
     const { passwordHash: _, githubAccessToken, ...safeUser } = user;
     safeUser.hasGitHubLinked = !!githubAccessToken;
+    safeUser.role = userRole;
 
     res.json({ token: sessionToken, user: safeUser });
   } catch (err) {
@@ -299,6 +302,7 @@ router.get('/auth/me', requireAuth, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
   const { githubAccessToken, passwordHash, ...safeUser } = user;
   safeUser.hasGitHubLinked = !!githubAccessToken;
+  safeUser.role = (user.role || 'developer').toLowerCase();
   res.json(safeUser);
 });
 
@@ -356,7 +360,7 @@ router.get('/repos', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/repos/connect', requireAuth, async (req, res) => {
+router.post('/repos/connect', requireAuth, requireOperationalRole, async (req, res) => {
   const { fullName, defaultBranch } = req.body;
   if (!fullName) return res.status(400).json({ error: 'fullName required' });
   await db.read();
@@ -375,7 +379,7 @@ router.post('/repos/connect', requireAuth, async (req, res) => {
 });
 
 // Scan by pasting manifest directly — works for ALL users (GitHub + Google)
-router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
+router.post('/repos/scan-manifest', requireAuth, requireOperationalRole, async (req, res) => {
   const startedAt = Date.now();
   try {
     const { manifestContent, projectName = 'my-project', maxDepth = 2 } = req.body;
@@ -396,7 +400,9 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
     if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
       const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
       const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
-      rootDeps = { ...deps, ...devDeps };
+      const peerDeps = typeof parsedManifest.peerDependencies === 'object' && parsedManifest.peerDependencies !== null ? parsedManifest.peerDependencies : {};
+      const optDeps = typeof parsedManifest.optionalDependencies === 'object' && parsedManifest.optionalDependencies !== null ? parsedManifest.optionalDependencies : {};
+      rootDeps = { ...deps, ...devDeps, ...peerDeps, ...optDeps };
     }
 
     // Fallback regex extractor if JSON parse failed or no dependencies were parsed
@@ -459,7 +465,8 @@ router.post('/repos/scan-manifest', requireAuth, async (req, res) => {
       components: tree.components,
       cycloneDX,
       spdx,
-      gate: { verdict: gate.verdict, reasons: gate.reasons, riskScore: gate.riskScore }
+      gate: { verdict: gate.verdict, reasons: gate.reasons, riskScore: gate.riskScore },
+      gateVerdict: gate.verdict
     });
   } catch (err) {
     res.status(500).json({ error: 'Scan failed', detail: err.message });
@@ -476,10 +483,10 @@ router.get('/repos/:id', requireAuth, async (req, res) => {
   res.json(repo);
 });
 
-router.delete('/repos/:id', requireAuth, async (req, res) => {
+router.delete('/repos/:id', requireAuth, requireOperationalRole, async (req, res) => {
   await db.read();
   const idx = db.data.repositories.findIndex(
-    (r) => r.id === req.params.id && (req.user.role === 'Admin' || r.ownerId === req.user.sub)
+    (r) => r.id === req.params.id && (req.user.role?.toLowerCase() === 'admin' || r.ownerId === req.user.sub)
   );
   if (idx === -1) return res.status(404).json({ error: 'Repository not found or not owned by you' });
   const [removed] = db.data.repositories.splice(idx, 1);
@@ -502,7 +509,7 @@ router.delete('/repos/:id', requireAuth, async (req, res) => {
  *  4. Malicious Package Analyzer runs typosquat + heuristic checks
  *  5. Persist scan_job, sbom, vulnerabilities, malicious_packages records
  */
-router.post('/repos/:id/scan', requireAuth, async (req, res) => {
+router.post('/repos/:id/scan', requireAuth, requireOperationalRole, async (req, res) => {
   const startedAt = Date.now();
   try {
     await db.read();
@@ -554,7 +561,9 @@ router.post('/repos/:id/scan', requireAuth, async (req, res) => {
       if (!manifestCorrupted && parsedManifest && typeof parsedManifest === 'object') {
         const deps = typeof parsedManifest.dependencies === 'object' && parsedManifest.dependencies !== null ? parsedManifest.dependencies : {};
         const devDeps = typeof parsedManifest.devDependencies === 'object' && parsedManifest.devDependencies !== null ? parsedManifest.devDependencies : {};
-        rootDeps = { ...deps, ...devDeps };
+        const peerDeps = typeof parsedManifest.peerDependencies === 'object' && parsedManifest.peerDependencies !== null ? parsedManifest.peerDependencies : {};
+        const optDeps = typeof parsedManifest.optionalDependencies === 'object' && parsedManifest.optionalDependencies !== null ? parsedManifest.optionalDependencies : {};
+        rootDeps = { ...deps, ...devDeps, ...peerDeps, ...optDeps };
       }
 
       if (manifestCorrupted || Object.keys(rootDeps).length === 0) {
@@ -855,7 +864,7 @@ router.get('/repos/:id/sbom', requireAuth, async (req, res) => {
   });
 });
 
-router.get('/sboms/:id/export', requireAuth, async (req, res) => {
+router.get('/sboms/:id/export', authenticateToken, async (req, res) => {
   await db.read();
   const sbom = db.data.sboms.find((s) => s.id === req.params.id);
   if (!sbom) return res.status(404).json({ error: 'Not found' });
@@ -864,8 +873,33 @@ router.get('/sboms/:id/export', requireAuth, async (req, res) => {
     return res.status(404).json({ error: 'SBOM not found or access denied' });
   }
   const format = req.query.format === 'spdx' ? 'spdx' : 'cyclonedx';
+  res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename=sbom-${sbom.id}-${format}.json`);
   res.json(format === 'spdx' ? sbom.spdx : sbom.cycloneDX);
+});
+
+router.get(['/vulnerabilities/:repoId/export', '/vulnerabilities/export'], authenticateToken, async (req, res) => {
+  await db.read();
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
+  const repoId = req.params.repoId;
+  const vulns = db.data.vulnerabilities || [];
+  let list = [];
+  if (repoId && repoId !== 'all') {
+    if (!allowedRepoIds.has(repoId)) {
+      return res.status(404).json({ error: 'Repository not found or access denied' });
+    }
+    list = vulns.filter((v) => v.repoId === repoId);
+  } else {
+    list = vulns.filter((v) => allowedRepoIds.has(v.repoId));
+  }
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename=vulnerabilities-report-${repoId || 'all'}.json`);
+  res.json({
+    generatedAt: new Date().toISOString(),
+    repoId: repoId || 'all',
+    count: list.length,
+    vulnerabilities: list,
+  });
 });
 
 // ---------- Vulnerability detail lookups (NVD / GitHub Advisory supplementary) ----------
@@ -904,7 +938,7 @@ router.get('/malicious-packages/:repoId', requireAuth, async (req, res) => {
   res.json(malicious.filter((m) => allowedRepoIds.has(m.repoId)));
 });
 
-router.patch('/vulnerabilities/:id/status', requireAuth, async (req, res) => {
+router.patch('/vulnerabilities/:id/status', requireAuth, requireOperationalRole, async (req, res) => {
   const { status, vexJustification } = req.body;
   const valid = ['Open', 'In Progress', 'Resolved', 'Accepted Risk'];
   if (!valid.includes(status)) return res.status(400).json({ error: `status must be one of ${valid.join(', ')}` });
@@ -923,7 +957,7 @@ router.patch('/vulnerabilities/:id/status', requireAuth, async (req, res) => {
 
 // ---------- Build integrity ----------
 
-router.post('/repos/:id/verify-build', requireAuth, async (req, res) => {
+router.post('/repos/:id/verify-build', requireAuth, requireOperationalRole, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
   if (!repo || !isRepoAuthorized(repo, req.user, db)) {
@@ -935,7 +969,7 @@ router.post('/repos/:id/verify-build', requireAuth, async (req, res) => {
   res.json(verdict);
 });
 
-router.post('/repos/:id/set-baseline', requireAuth, async (req, res) => {
+router.post('/repos/:id/set-baseline', requireAuth, requireOperationalRole, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
   if (!repo || !isRepoAuthorized(repo, req.user, db)) {
@@ -1174,7 +1208,7 @@ router.post('/teams/:teamId/request-join', requireAuth, async (req, res) => {
 });
 
 /** GET /team/requests — Admin list of pending join requests for their team */
-router.get('/team/requests', requireAuth, async (req, res) => {
+router.get('/team/requests', requireAuth, requireAdmin, async (req, res) => {
   try {
     await db.read();
     const user = db.data.users.find(
@@ -1193,13 +1227,13 @@ router.get('/team/requests', requireAuth, async (req, res) => {
 });
 
 /** POST /team/requests/:requestId/respond — Approve or Reject a join request (Admin only) */
-router.post('/team/requests/:requestId/respond', requireAuth, async (req, res) => {
+router.post('/team/requests/:requestId/respond', requireAuth, requireAdmin, async (req, res) => {
   try {
     await db.read();
     const actor = db.data.users.find(
       (u) => String(u.githubId) === req.user.sub || u.googleId === req.user.sub || u.id === req.user.sub
     );
-    if (!actor || actor.role !== 'Admin') {
+    if (!actor || actor.role?.toLowerCase() !== 'admin') {
       return res.status(403).json({ error: 'Only team Admins can approve or reject join requests' });
     }
 
@@ -1353,13 +1387,13 @@ router.get('/team/members', requireAuth, async (req, res) => {
 });
 
 /** DELETE /team/members/:id — remove a member from the team (Admin only) */
-router.delete('/team/members/:id', requireAuth, async (req, res) => {
+router.delete('/team/members/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     await db.read();
     const actor = db.data.users.find(
       (u) => String(u.githubId) === req.user.sub || u.googleId === req.user.sub || u.id === req.user.sub
     );
-    if (!actor || actor.role !== 'Admin') {
+    if (!actor || actor.role?.toLowerCase() !== 'admin') {
       return res.status(403).json({ error: 'Only Admins can remove members' });
     }
     const target = db.data.users.find((u) => u.id === req.params.id);
@@ -1385,16 +1419,9 @@ router.get('/dashboard/summary', requireAuth, async (req, res) => {
     (u) => String(u.githubId) === req.user.sub || u.googleId === req.user.sub || u.id === req.user.sub
   );
 
-  // Collect repo IDs the user can see (own + team members')
-  let allowedOwnerIds = [req.user.sub];
-  if (user?.orgId) {
-    const teamMemberSubs = db.data.users
-      .filter((u) => u.orgId === user.orgId)
-      .map((u) => String(u.githubId) || u.googleId || u.id);
-    allowedOwnerIds = [...new Set([...allowedOwnerIds, ...teamMemberSubs])];
-  }
-
-  const repos     = db.data.repositories.filter((r) => allowedOwnerIds.includes(r.ownerId));
+  // Collect repo IDs the user can see (own + team members only)
+  const allowedRepoIds = getAllowedRepoIds(req.user, db);
+  const repos     = db.data.repositories.filter((r) => allowedRepoIds.has(r.id));
   const repoIds   = repos.map((r) => r.id);
   const vulns     = db.data.vulnerabilities.filter((v) => repoIds.includes(v.repoId));
   const malicious = db.data.malicious_packages.filter((m) => repoIds.includes(m.repoId));

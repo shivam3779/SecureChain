@@ -196,15 +196,10 @@ export default function Landing() {
       {/* ── Top Navigation Bar (#12101B Theme) ── */}
       <header className="fixed top-0 inset-x-0 z-50 h-16 flex items-center px-6 md:px-10 border-b border-[#231D38] bg-[#12101B]/90 backdrop-blur-md">
         <div className="flex items-center gap-3 mr-auto">
-          {/* Monogram with radiant gradient */}
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#FF2E93] via-[#D946EF] to-[#8B5CF6] flex items-center justify-center text-white shadow-[0_0_15px_rgba(255,46,147,0.4)]">
-            <span className="text-white text-xs font-black font-['Space_Grotesk']">SC</span>
-          </div>
+          {/* Brand Logo */}
+          <img src="/logo.png" alt="SecureChain Logo" className="w-12 h-12 object-contain drop-shadow-[0_0_12px_rgba(59,130,246,0.5)]" />
           <span className="font-bold text-base text-white font-['Space_Grotesk'] tracking-tight">
             SecureChain
-          </span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#241D3B] text-[#D946EF] border border-[#3D305F] ml-1">
-            v1.0
           </span>
         </div>
 
@@ -247,7 +242,7 @@ export default function Landing() {
           {/* Left Column Copy with less blurry, more translucent glass */}
           <div
             id="hero-text-content"
-            className="lg:col-span-6 pointer-events-auto text-center lg:text-left bg-[#12101B]/40 backdrop-blur-md p-6 lg:p-8 rounded-3xl border border-[#2D2345]/70 shadow-[0_10px_40px_rgba(0,0,0,0.6)] relative z-10 translate-y-[10px] translate-x-[-20px]"
+            className="lg:col-span-6 pointer-events-auto text-center lg:text-left bg-[#12101B]/40 backdrop-blur-md p-6 lg:p-8 rounded-3xl border border-[#2D2345]/70 shadow-[0_10px_40px_rgba(0,0,0,0.6)] relative z-10 translate-y-[20px] translate-x-[-20px]"
           >
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1C172E] border border-[#342955] text-slate-300 font-semibold text-xs font-mono mb-6 shadow-md cursor-default">
               <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
@@ -542,9 +537,7 @@ export default function Landing() {
           {/* Bottom Bar: Logo, Socials, Patents, Legal */}
           <div className="pt-8 border-t border-[#1F1932] flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-3">
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-[#FF2E93] via-[#D946EF] to-[#8B5CF6] flex items-center justify-center text-white">
-                <span className="text-[10px] font-black font-['Space_Grotesk']">SC</span>
-              </div>
+              <img src="/logo.png" alt="SecureChain Logo" className="w-6 h-6 object-contain" />
               <span className="font-bold text-sm text-white font-['Space_Grotesk']">
                 SecureChain Inc.
               </span>

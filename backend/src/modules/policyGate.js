@@ -127,30 +127,38 @@ function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdi
     });
   }
 
-  // 3. Vulnerability severity & EPSS threshold check (FAILED)
-  const vulnFindings = scanResult.vulnerabilities || [];
+  // 3. Vulnerability severity & EPSS threshold check (FAILED/BLOCKED)
+  const vulnFindings = scanResult.vulnerabilities || scanResult.findings || [];
 
-  const criticalVulns = vulnFindings.filter((v) =>
-    v.priorityLabel === 'P0_CRITICAL' || (v.severity != null && v.severity >= policy.cvssBlockThreshold)
-  );
+  const criticalVulns = vulnFindings.filter((v) => {
+    const cvss = v.severity ?? v.cvssScore;
+    return v.priorityLabel === 'P0_CRITICAL' || (cvss != null && cvss >= policy.cvssBlockThreshold);
+  });
   if (criticalVulns.length > policy.maxCriticalVulns && verdict !== 'BLOCKED') {
-    verdict = 'FAILED';
+    verdict = policy.blockOnCriticalVulns ? 'BLOCKED' : 'FAILED';
+    const pkgList = criticalVulns.map((v) => `${v.component || v.packageName || v.name || 'pkg'}@${v.version || ''} (${v.cveId || v.id})`).slice(0, 10).join(', ');
     reasons.push({
       type: 'CRITICAL_VULNERABILITY_LIMIT_EXCEEDED',
       count: criticalVulns.length,
+      packages: criticalVulns.map((v) => v.component || v.packageName || v.name).filter(Boolean),
       cveIds: criticalVulns.map((v) => v.cveId || v.id).filter(Boolean),
-      detail: `${criticalVulns.length} critical vulnerability(ies) exceed policy limit of ${policy.maxCriticalVulns}`,
+      detail: `${criticalVulns.length} critical vulnerability(ies) exceed policy limit of ${policy.maxCriticalVulns}: ${pkgList}`,
     });
   }
 
-  const highVulns = vulnFindings.filter((v) => v.priorityLabel === 'P1_HIGH');
+  const highVulns = vulnFindings.filter((v) => {
+    const cvss = v.severity ?? v.cvssScore;
+    return v.priorityLabel === 'P1_HIGH' || (cvss != null && cvss >= 7.0 && cvss < policy.cvssBlockThreshold);
+  });
   if (highVulns.length > policy.maxHighVulns && verdict !== 'BLOCKED') {
-    verdict = 'FAILED';
+    verdict = policy.blockOnHighVulns ? 'BLOCKED' : 'FAILED';
+    const pkgList = highVulns.map((v) => `${v.component || v.packageName || v.name || 'pkg'}@${v.version || ''} (${v.cveId || v.id})`).slice(0, 10).join(', ');
     reasons.push({
       type: 'HIGH_VULNERABILITY_LIMIT_EXCEEDED',
       count: highVulns.length,
+      packages: highVulns.map((v) => v.component || v.packageName || v.name).filter(Boolean),
       cveIds: highVulns.map((v) => v.cveId || v.id).filter(Boolean),
-      detail: `${highVulns.length} high-severity findings exceed policy limit of ${policy.maxHighVulns}`,
+      detail: `${highVulns.length} high-severity findings exceed policy limit of ${policy.maxHighVulns}: ${pkgList}`,
     });
   }
 
@@ -162,6 +170,7 @@ function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdi
     reasons.push({
       type: 'EPSS_EXPLOIT_RISK_EXCEEDED',
       count: highEpssVulns.length,
+      packages: highEpssVulns.map((v) => v.component || v.packageName || v.name).filter(Boolean),
       cveIds: highEpssVulns.map((v) => v.cveId || v.id).filter(Boolean),
       detail: `${highEpssVulns.length} finding(s) have EPSS exploit probability >= ${(policy.epssBlockThreshold * 100).toFixed(0)}%`,
     });
@@ -179,6 +188,7 @@ function evaluateGate(scanResult = {}, policyOverrides = {}, buildIntegrityVerdi
 
   return {
     verdict, // PASS | FAILED | BLOCKED
+    gateVerdict: (verdict === 'FAILED' || verdict === 'BLOCKED') ? 'BLOCKED' : verdict,
     passed: verdict === 'PASS',
     reasons,
     evaluatedAt: new Date().toISOString(),

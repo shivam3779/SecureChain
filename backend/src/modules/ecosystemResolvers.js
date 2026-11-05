@@ -284,7 +284,9 @@ async function resolveFromManifest(filename, content, opts = {}) {
     if (!manifestCorrupted && manifest && typeof manifest === 'object') {
       const deps = typeof manifest.dependencies === 'object' && manifest.dependencies !== null ? manifest.dependencies : {};
       const devDeps = typeof manifest.devDependencies === 'object' && manifest.devDependencies !== null ? manifest.devDependencies : {};
-      rootDeps = { ...deps, ...devDeps };
+      const peerDeps = typeof manifest.peerDependencies === 'object' && manifest.peerDependencies !== null ? manifest.peerDependencies : {};
+      const optDeps = typeof manifest.optionalDependencies === 'object' && manifest.optionalDependencies !== null ? manifest.optionalDependencies : {};
+      rootDeps = { ...deps, ...devDeps, ...peerDeps, ...optDeps };
     }
 
     if (manifestCorrupted || Object.keys(rootDeps).length === 0) {

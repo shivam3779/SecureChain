@@ -1,15 +1,48 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-function getToken() {
-  return localStorage.getItem('securechain_token');
+export function getToken() {
+  return localStorage.getItem('token') || localStorage.getItem('securechain_token');
 }
 
 export function setToken(token) {
   localStorage.setItem('securechain_token', token);
+  localStorage.setItem('token', token);
 }
 
 export function clearToken() {
   localStorage.removeItem('securechain_token');
+  localStorage.removeItem('token');
+}
+
+export async function downloadFile(path, defaultFilename = 'download.json') {
+  const token = getToken();
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    let errBody = null;
+    try {
+      errBody = await response.json();
+    } catch {
+      // ignore
+    }
+    throw new Error(errBody?.error || errBody?.detail || `Download failed: ${response.status}`);
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename=["']?([^"';]+)["']?/);
+  const filename = match ? match[1] : defaultFilename;
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 async function request(path, options = {}) {
@@ -78,7 +111,12 @@ export const api = {
   listSboms: (repoId) => request(`/api/sboms${repoId ? `?repoId=${repoId}` : ''}`),
   getSbom: (id) => request(`/api/sboms/${id}`),
   getLatestSbom: (repoId) => request(`/api/repos/${repoId}/sbom`),
-  exportSbomUrl: (sbomId, format) => `${API_BASE}/api/sboms/${sbomId}/export?format=${format}`,
+  downloadSbom: (sbomId, format = 'cyclonedx') =>
+    downloadFile(`/api/sboms/${sbomId}/export?format=${format}`, `sbom-${sbomId}-${format}.json`),
+  exportSbomUrl: (sbomId, format) => {
+    const token = getToken();
+    return `${API_BASE}/api/sboms/${sbomId}/export?format=${format}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  },
 
   // Build integrity
   verifyBuild: (repoId, currentContent, baselineHash) =>
@@ -114,12 +152,29 @@ export const api = {
 
   // Compliance
   getCompliance: (repoId) => request(`/api/repos/${repoId}/compliance`),
-  downloadComplianceUrl: (repoId) => `${API_BASE}/api/repos/${repoId}/compliance/download`,
+  downloadCompliance: (repoId) =>
+    downloadFile(`/api/repos/${repoId}/compliance/download`, `securechain-compliance-${repoId}.json`),
+  downloadComplianceUrl: (repoId) => {
+    const token = getToken();
+    return `${API_BASE}/api/repos/${repoId}/compliance/download${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  },
+  downloadVulnerabilities: (repoId = 'all') =>
+    downloadFile(`/api/vulnerabilities/${repoId}/export`, `vulnerabilities-report-${repoId}.json`),
 
   // Admin
   adminUsers: () => request('/api/admin/users'),
   adminSetRole: (userId, role) => request(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: { role } }),
-  adminInvite: (email, role, orgId) => request('/api/admin/users/invite', { method: 'POST', body: { email, role, orgId } }),
+  adminInvite: (email, role, orgId, customHeaders = {}) => {
+    const token = getToken();
+    return request('/api/admin/users/invite', {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...customHeaders,
+      },
+      body: { email, role, orgId },
+    });
+  },
   adminOrgs: () => request('/api/admin/orgs'),
   adminCreateOrg: (name) => request('/api/admin/orgs', { method: 'POST', body: { name } }),
   adminUpgradePlan: (orgId, plan) => request(`/api/admin/orgs/${orgId}/plan`, { method: 'PATCH', body: { plan } }),

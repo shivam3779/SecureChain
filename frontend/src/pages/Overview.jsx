@@ -61,7 +61,7 @@ export default function Overview() {
   if (loading) return <div className="flex items-center justify-center h-64"><Spinner size={28} color="#0f172a" /></div>;
 
   return (
-    <div className="space-y-8 max-w-6xl">
+    <div className="space-y-8 w-full">
       {/* Personalized header */}
       <div className="flex items-center gap-4">
         {/* Profile picture */}
@@ -95,7 +95,7 @@ export default function Overview() {
             {greeting}, {displayName.split(' ')[0]} 👋
           </h1>
           <div className="flex items-center gap-2 mt-1">
-            <p className="text-slate-500 text-sm">Real-time supply chain security posture.</p>
+            <p className="text-slate-500 text-sm">Security posture overview.</p>
             {summary?.teamName && (
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-slate-200 text-slate-700 bg-slate-100">
                 👥 {summary.teamName}
@@ -124,8 +124,8 @@ export default function Overview() {
           <Badge variant="cyan">{events.length} events</Badge>
         </div>
         {events.length === 0 ? (
-          <Card className="p-8 text-center text-slate-400 text-xs font-mono">
-            No new threat events in this session — background feed actively monitoring.
+          <Card className="p-6 text-center text-slate-400 text-xs font-mono">
+            No threats detected. Continuous monitoring active.
           </Card>
         ) : (
           <Card className="divide-y divide-slate-100 overflow-hidden shadow-xs">
@@ -147,10 +147,10 @@ export default function Overview() {
       {summary?.monitoredRepositories === 0 && (
         <Card className="p-8 text-center bg-white border border-slate-200">
           <p className="text-3xl mb-3 text-slate-400">◈</p>
-          <h3 className="font-bold text-slate-900 mb-2 font-['Space_Grotesk'] text-lg">Connect your first repository</h3>
-          <p className="text-slate-500 text-xs mb-6 max-w-sm mx-auto leading-relaxed">SecureChain will automatically generate SBOMs, scan for vulnerabilities, and block malicious packages on every git push.</p>
+          <h3 className="font-bold text-slate-900 mb-1.5 font-['Space_Grotesk'] text-base">Connect a repository</h3>
+          <p className="text-slate-500 text-xs mb-5 max-w-sm mx-auto leading-relaxed">Scan dependencies, generate SBOMs, and detect vulnerabilities automatically.</p>
           <Link to="/dashboard/repos">
-            <button className="bg-slate-900 text-white font-semibold px-6 py-2.5 rounded-lg text-xs hover:bg-slate-800 transition-colors shadow-xs cursor-pointer">
+            <button className="bg-slate-900 text-white font-semibold px-5 py-2 rounded-lg text-xs hover:bg-slate-800 transition-colors shadow-xs cursor-pointer">
               Add repository →
             </button>
           </Link>

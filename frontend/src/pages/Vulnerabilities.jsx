@@ -130,8 +130,20 @@ export default function Vulnerabilities() {
   const [selectedRepoId, setSelectedRepoId] = useState(repoIdParam || 'all');
   const [vulns, setVulns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [err, setErr] = useState('');
   const [filter, setFilter] = useState('All');
+
+  async function handleDownloadReport() {
+    try {
+      setDownloading(true);
+      await api.downloadVulnerabilities(selectedRepoId);
+    } catch (e) {
+      setErr(e.message || 'Report download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -177,12 +189,15 @@ export default function Vulnerabilities() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900">Vulnerabilities</h1>
-          <p className="text-slate-500 text-sm mt-1">CVE findings, EPSS-CVSS priority fusion, VEX workflow.</p>
+          <p className="text-slate-500 text-sm mt-1">Prioritized CVE findings and remediation workflows.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Badge variant="critical">{counts.P0_CRITICAL} P0</Badge>
           <Badge variant="high">{counts.P1_HIGH} P1</Badge>
           <Badge variant="default">{counts.Open} Open</Badge>
+          <Button size="sm" variant="ghost" loading={downloading} onClick={handleDownloadReport}>
+            ↓ Export JSON
+          </Button>
         </div>
       </div>
 
@@ -190,7 +205,7 @@ export default function Vulnerabilities() {
 
       {/* Repo Dropdown Selector */}
       <Card className="p-4 flex flex-wrap items-center justify-between gap-4">
-        <SectionLabel>Filter by Repository / Package</SectionLabel>
+        <SectionLabel>Filter Repository</SectionLabel>
         <div className="flex items-center gap-3 flex-1 min-w-[280px]">
           <select
             value={selectedRepoId}

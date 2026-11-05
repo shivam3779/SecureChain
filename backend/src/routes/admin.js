@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, authenticateToken, requireAdmin, isRepoAuthorized } = require('../middleware/auth');
 const admin = require('../modules/adminLayer');
 const compliance = require('../modules/complianceEngine');
 const { db } = require('../db/store');
@@ -11,7 +11,7 @@ router.get('/repos/:id/compliance', requireAuth, async (req, res) => {
   try {
     await db.read();
     const repo = db.data.repositories.find(r => r.id === req.params.id);
-    if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+    if (!repo || !isRepoAuthorized(repo, req.user, db)) {
       return res.status(404).json({ error: 'Repository not found or access denied' });
     }
 
@@ -36,14 +36,28 @@ router.get('/repos/:id/compliance', requireAuth, async (req, res) => {
 });
 
 // Download compliance report as JSON
-router.get('/repos/:id/compliance/download', requireAuth, async (req, res) => {
+router.get(['/repos/:id/compliance/download', '/compliance/:id/download'], authenticateToken, async (req, res) => {
   await db.read();
   const repo = db.data.repositories?.find(r => r.id === req.params.id);
-  if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+  if (!repo || !isRepoAuthorized(repo, req.user, db)) {
     return res.status(404).json({ error: 'Repository not found or access denied' });
   }
-  const report = db.data.compliance_reports?.find(r => r.repoId === req.params.id);
-  if (!report) return res.status(404).json({ error: 'No compliance report found — generate one first via GET /compliance' });
+  let report = db.data.compliance_reports?.find(r => r.repoId === req.params.id);
+  if (!report) {
+    try {
+      const scans     = db.data.scan_jobs?.filter(s => s.repoId === repo.id) || [];
+      const sboms     = db.data.sboms?.filter(s => s.repoId === repo.id) || [];
+      const vulns     = db.data.vulnerabilities?.filter(v => v.repoId === repo.id) || [];
+      const malicious = db.data.malicious_packages?.filter(m => m.repoId === repo.id) || [];
+      report = compliance.generateReport(repo, { scans, sboms, vulns, malicious });
+      db.data.compliance_reports = db.data.compliance_reports || [];
+      db.data.compliance_reports.push(report);
+      await db.write();
+    } catch (e) {
+      return res.status(404).json({ error: 'No compliance report found — generate one first via GET /compliance' });
+    }
+  }
+  res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename=securechain-compliance-${req.params.id}.json`);
   res.json(report);
 });

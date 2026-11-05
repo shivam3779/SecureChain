@@ -46,6 +46,19 @@ export default function SbomPage() {
   const [filterType, setFilterType] = useState('all'); // all | scripts | unresolved
   const [viewTab, setViewTab] = useState('components'); // components | cyclonedx | spdx | diff
   const [copied, setCopied] = useState(false);
+  const [downloadingFormat, setDownloadingFormat] = useState('');
+
+  async function handleDownload(format) {
+    if (!result?.id) return;
+    try {
+      setDownloadingFormat(format);
+      await api.downloadSbom(result.id, format);
+    } catch (e) {
+      setErr(e.message || 'Download failed');
+    } finally {
+      setDownloadingFormat('');
+    }
+  }
 
   // Load repositories and SBOM history
   async function loadData() {
@@ -187,9 +200,9 @@ export default function SbomPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900">Software Bill of Materials (SBOM)</h1>
+          <h1 className="text-2xl font-black font-['Space_Grotesk'] text-slate-900">SBOM Inventory</h1>
           <p className="text-slate-500 text-sm mt-1">
-            Transitive dependency graph in CycloneDX 1.5 & SPDX 2.3 format — generated automatically on every repository scan.
+            CycloneDX and SPDX dependency graphs and licensing data.
           </p>
         </div>
         <Button size="sm" variant="ghost" onClick={loadData}>↺ Refresh</Button>
@@ -200,7 +213,7 @@ export default function SbomPage() {
       {/* Selector and Generator Card */}
       <Card className="p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <SectionLabel>Select Scanned Repository / Package</SectionLabel>
+          <SectionLabel>Select SBOM</SectionLabel>
           {result?.createdAt && (
             <span className="text-xs font-mono text-slate-400">
               Generated: {new Date(result.createdAt).toLocaleString()}
@@ -301,12 +314,22 @@ export default function SbomPage() {
             {/* Quick Export Downloads */}
             {result.id && (
               <div className="flex items-center gap-2 mb-2">
-                <a href={api.exportSbomUrl(result.id, 'cyclonedx')} download target="_blank" rel="noreferrer">
-                  <Button size="sm" variant="ghost">↓ CycloneDX</Button>
-                </a>
-                <a href={api.exportSbomUrl(result.id, 'spdx')} download target="_blank" rel="noreferrer">
-                  <Button size="sm" variant="ghost">↓ SPDX</Button>
-                </a>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={downloadingFormat === 'cyclonedx'}
+                  onClick={() => handleDownload('cyclonedx')}
+                >
+                  ↓ CycloneDX
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={downloadingFormat === 'spdx'}
+                  onClick={() => handleDownload('spdx')}
+                >
+                  ↓ SPDX
+                </Button>
               </div>
             )}
           </div>
@@ -458,9 +481,19 @@ export default function SbomPage() {
             <Card className="p-5 space-y-3">
               <div className="flex items-center justify-between">
                 <SectionLabel>CycloneDX 1.5 JSON Specification</SectionLabel>
-                <Button size="sm" variant="ghost" onClick={() => handleCopyJson(result.cycloneDX)}>
-                  {copied ? '✓ Copied' : 'Copy JSON'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={downloadingFormat === 'cyclonedx'}
+                    onClick={() => handleDownload('cyclonedx')}
+                  >
+                    ↓ Download JSON
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => handleCopyJson(result.cycloneDX)}>
+                    {copied ? '✓ Copied' : 'Copy JSON'}
+                  </Button>
+                </div>
               </div>
               <pre className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs font-mono text-slate-800 overflow-x-auto max-h-[500px]">
                 {JSON.stringify(result.cycloneDX, null, 2) || '// CycloneDX spec unavailable'}
@@ -473,9 +506,19 @@ export default function SbomPage() {
             <Card className="p-5 space-y-3">
               <div className="flex items-center justify-between">
                 <SectionLabel>SPDX 2.3 JSON Specification</SectionLabel>
-                <Button size="sm" variant="ghost" onClick={() => handleCopyJson(result.spdx)}>
-                  {copied ? '✓ Copied' : 'Copy JSON'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={downloadingFormat === 'spdx'}
+                    onClick={() => handleDownload('spdx')}
+                  >
+                    ↓ Download JSON
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => handleCopyJson(result.spdx)}>
+                    {copied ? '✓ Copied' : 'Copy JSON'}
+                  </Button>
+                </div>
               </div>
               <pre className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs font-mono text-slate-800 overflow-x-auto max-h-[500px]">
                 {JSON.stringify(result.spdx, null, 2) || '// SPDX spec unavailable'}

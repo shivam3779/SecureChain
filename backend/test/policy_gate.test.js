@@ -145,4 +145,33 @@ describe('Policy Gate Decision Engine', () => {
     assert.equal(decision.riskScore, 0);
     assert.equal(decision.reasons[0].type, 'MANIFEST_CORRUPTED_OR_EMPTY');
   });
+
+  test('sets gateVerdict to BLOCKED and returns affected packages and CVE IDs on critical vulnerabilities', () => {
+    const scan = {
+      vulnerabilities: [
+        { id: 'CVE-2021-23337', cveId: 'CVE-2021-23337', component: 'lodash', version: '4.17.15', priorityLabel: 'P0_CRITICAL', severity: 7.1 },
+      ],
+      maliciousPackages: [],
+      components: [{ name: 'lodash', version: '4.17.15', resolved: true }],
+    };
+    const decision = evaluateGate(scan);
+    assert.equal(decision.passed, false);
+    assert.equal(decision.gateVerdict, 'BLOCKED');
+    assert.ok(decision.reasons[0].packages.includes('lodash'));
+    assert.ok(decision.reasons[0].cveIds.includes('CVE-2021-23337'));
+    assert.ok(decision.reasons[0].detail.includes('lodash@4.17.15'));
+  });
+
+  test('respects blockOnCriticalVulns override to set verdict directly to BLOCKED', () => {
+    const scan = {
+      vulnerabilities: [
+        { id: 'CVE-2021-23337', cveId: 'CVE-2021-23337', component: 'lodash', version: '4.17.15', priorityLabel: 'P0_CRITICAL', severity: 7.1 },
+      ],
+      maliciousPackages: [],
+      components: [{ name: 'lodash', version: '4.17.15', resolved: true }],
+    };
+    const decision = evaluateGate(scan, { blockOnCriticalVulns: true });
+    assert.equal(decision.verdict, 'BLOCKED');
+    assert.equal(decision.passed, false);
+  });
 });

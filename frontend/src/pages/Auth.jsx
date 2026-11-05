@@ -117,9 +117,7 @@ export function LoginPage() {
         {/* Header / Brand matching app design system */}
         <div className="text-center mb-6">
           <div className="inline-flex items-center gap-2.5 mb-2 cursor-pointer" onClick={() => navigate('/')}>
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#FF2E93] via-[#D946EF] to-[#8B5CF6] flex items-center justify-center text-white shadow-[0_0_15px_rgba(255,46,147,0.4)]">
-              <span className="text-white text-xs font-black font-['Space_Grotesk']">SC</span>
-            </div>
+            <img src="/logo.png" alt="SecureChain Logo" className="w-9 h-9 object-contain drop-shadow-[0_0_12px_rgba(59,130,246,0.5)]" />
             <h1 className="text-2xl font-black tracking-tight text-white font-['Space_Grotesk']">
               SecureChain
             </h1>

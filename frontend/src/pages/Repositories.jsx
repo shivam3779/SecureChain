@@ -275,21 +275,14 @@ export default function Repositories() {
 
       {/* Info banner for Google users without GitHub linked */}
       {!hasGitHubToken && (
-        <div className="flex items-start gap-4 px-5 py-4 rounded-xl bg-slate-50 border border-slate-200 shadow-2xs">
-          <span className="text-2xl shrink-0">🔗</span>
-          <div className="flex-1">
-            <p className="font-semibold text-slate-900 font-['Space_Grotesk']">Connect your GitHub account</p>
-            <p className="text-xs mt-1 text-slate-600">
-              You're signed in with Google. Connect GitHub to browse and scan your repositories directly —
-              or use <strong className="text-slate-900">Add manually</strong> / <strong className="text-slate-900">Paste manifest</strong> to scan any project right now without linking GitHub.
-            </p>
-            <Button onClick={connectGitHub} size="sm" className="mt-3">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-              </svg>
-              Connect GitHub Account
-            </Button>
+        <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="text-base">🔗</span>
+            <span>Link GitHub to import and auto-scan your repositories directly.</span>
           </div>
+          <Button onClick={connectGitHub} size="sm" variant="ghost">
+            Connect GitHub
+          </Button>
         </div>
       )}
 
@@ -310,9 +303,9 @@ export default function Repositories() {
       {/* ── Tab: Connected ── */}
       {tab === 'connected' && (
         connected.length === 0 ? (
-          <EmptyState icon="⊞" title="No repositories connected yet"
-            body="Use one of the other tabs to connect a repo or scan a project directly."
-            action={<Button size="sm" variant="ghost" onClick={() => setTab('paste')}>Paste manifest to scan now →</Button>}
+          <EmptyState icon="⊞" title="No repositories connected"
+            body="Connect a repository or paste a manifest to begin scanning."
+            action={<Button size="sm" variant="ghost" onClick={() => setTab('paste')}>Paste manifest →</Button>}
           />
         ) : (
           <div className="space-y-3">
@@ -332,7 +325,7 @@ export default function Repositories() {
       {tab === 'github' && (
         ghRepos.length === 0 ? (
           <EmptyState icon="⊞" title="No GitHub repos found"
-            body="Make sure you signed in with GitHub OAuth." />
+            body="Verify GitHub connection permissions." />
         ) : (
           <div className="space-y-2">
             {ghRepos.map(repo => (
@@ -358,85 +351,65 @@ export default function Repositories() {
 
       {/* ── Tab: Add manually ── */}
       {tab === 'manual' && (
-        <Card className="p-6 space-y-4">
-          <SectionLabel>Connect any GitHub repository by name</SectionLabel>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Type the GitHub repository name in <code className="font-mono text-slate-800 bg-slate-100 px-1 py-0.5 rounded">owner/repo</code> format.
-            This works even if you're signed in with Google — SecureChain will fetch the manifest using its verified GitHub connection.
-          </p>
+        <Card className="p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <SectionLabel>Connect Repository</SectionLabel>
+            <span className="text-xs text-slate-400 font-mono">owner/repo</span>
+          </div>
           <div className="flex gap-3 flex-wrap">
             <input
               value={manualName}
               onChange={e => setManualName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && connectManual()}
-              placeholder="e.g. facebook/react or your-username/your-repo"
-              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-lg px-4 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900 font-mono shadow-2xs"
+              placeholder="e.g. facebook/react"
+              className="flex-1 min-w-0 bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-800 font-mono shadow-xs"
             />
             <input
               value={manualBranch}
               onChange={e => setManualBranch(e.target.value)}
-              placeholder="main"
-              className="w-28 bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900 font-mono shadow-2xs"
+              placeholder="branch (main)"
+              className="w-28 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-800 font-mono shadow-xs"
             />
             <Button onClick={connectManual} loading={connecting}>Connect</Button>
           </div>
-          <p className="text-[11px] text-slate-400">
-            After connecting, click <strong>Scan now</strong> from the Connected tab.
-          </p>
         </Card>
       )}
 
       {/* ── Tab: Paste manifest ── */}
       {tab === 'paste' && (
         <div className="space-y-4">
-          <Card className="p-6 space-y-4">
-            <SectionLabel>Scan any project — no GitHub login needed</SectionLabel>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Paste your <code className="font-mono text-slate-800 bg-slate-100 px-1 py-0.5 rounded">package.json</code> content below,
-              or upload the file. SecureChain will resolve all dependencies from the registry
-              and run the full security scan — works for any project regardless of where it's hosted.
-            </p>
-
-            {/* File upload */}
-            <div className="flex items-center gap-3">
-              <label className="cursor-pointer px-4 py-2 text-xs font-medium border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs">
-                📁 Upload package.json
+          <Card className="p-5 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <SectionLabel>Scan Manifest</SectionLabel>
+              <label className="cursor-pointer text-xs font-medium text-slate-700 hover:text-slate-900 flex items-center gap-1.5 border border-slate-200 rounded-md px-2.5 py-1 hover:bg-slate-50 transition-colors shadow-2xs">
+                <span>📁 Upload package.json</span>
                 <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} />
               </label>
-              <span className="text-xs text-slate-400">or paste below</span>
             </div>
 
-            {/* Project name */}
-            <div>
-              <label className="text-xs font-mono text-slate-600 font-medium">Project name (optional)</label>
-              <input
-                value={manifestProject}
-                onChange={e => setManifestProject(e.target.value)}
-                placeholder="my-project"
-                className="w-full mt-1 bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900 font-mono shadow-2xs"
-              />
-            </div>
+            <input
+              value={manifestProject}
+              onChange={e => setManifestProject(e.target.value)}
+              placeholder="Project name (optional)"
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-800 font-mono shadow-xs"
+            />
 
-            {/* Manifest textarea */}
-            <div>
-              <label className="text-xs font-mono text-slate-600 font-medium">package.json content</label>
-              <textarea
-                value={manifestText}
-                onChange={e => setManifestText(e.target.value)}
-                rows={10}
-                placeholder={`{\n  "name": "my-app",\n  "dependencies": {\n    "express": "^4.18.0",\n    "lodash": "^4.17.21"\n  }\n}`}
-                className="w-full mt-1 bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900 font-mono resize-y shadow-2xs"
-              />
-            </div>
+            <textarea
+              value={manifestText}
+              onChange={e => setManifestText(e.target.value)}
+              rows={8}
+              placeholder={`{\n  "dependencies": {\n    "express": "^4.18.0"\n  }\n}`}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-800 font-mono resize-y shadow-xs"
+            />
 
             <Button
               onClick={scanPastedManifest}
               loading={manifestScanning}
               disabled={!manifestText.trim()}
               className="w-full justify-center"
-              size="lg"
+              size="md"
             >
-              {manifestScanning ? 'Scanning dependencies…' : '▶ Run security scan'}
+              {manifestScanning ? 'Analyzing dependencies…' : 'Scan Manifest'}
             </Button>
           </Card>
 
@@ -454,7 +427,7 @@ export default function Repositories() {
                   </span>
                   <div>
                     <div className="font-bold text-slate-900 font-['Space_Grotesk']">
-                      Gate verdict: {manifestResult.gate?.verdict ?? 'N/A'}
+                      Gate verdict: {(manifestResult.gateVerdict || manifestResult.gate?.verdict) ?? 'N/A'}
                     </div>
                     <div className="text-xs text-slate-500">Risk score: {manifestResult.riskScore}</div>
                   </div>
@@ -487,19 +460,19 @@ export default function Repositories() {
                 <Card className="p-4">
                   <SectionLabel>Top findings</SectionLabel>
                   <div className="mt-3 space-y-2">
-                    {manifestResult.vulnerabilities.slice(0, 5).map((v, i) => (
+                    {manifestResult.vulnerabilities.slice(0, 10).map((v, i) => (
                       <div key={i} className="flex items-center gap-3 text-xs">
                         <Badge variant={v.priorityLabel === 'P0_CRITICAL' ? 'critical' : v.priorityLabel === 'P1_HIGH' ? 'high' : 'medium'}>
                           {v.priorityLabel}
                         </Badge>
                         <span className="font-mono text-slate-900 font-semibold">{v.cveId || v.id}</span>
-                        <span className="text-slate-600">{v.component}@{v.version}</span>
-                        <span className="text-slate-400 ml-auto">CVSS {v.severity ?? 'N/A'}</span>
+                        <span className="text-slate-600">{v.component || v.packageName}@{v.version}</span>
+                        <span className="text-slate-400 ml-auto">CVSS {v.severity ?? v.cvssScore ?? 'N/A'}</span>
                       </div>
                     ))}
-                    {manifestResult.vulnerabilities.length > 5 && (
+                    {manifestResult.vulnerabilities.length > 10 && (
                       <p className="text-xs text-slate-400 mt-1">
-                        + {manifestResult.vulnerabilities.length - 5} more — go to Vulnerabilities page for the full list
+                        + {manifestResult.vulnerabilities.length - 10} more — go to Vulnerabilities page for the full list
                       </p>
                     )}
                   </div>

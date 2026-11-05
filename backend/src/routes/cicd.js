@@ -9,7 +9,7 @@ const policyGate = require('../modules/policyGate');
 const notifications = require('../modules/notificationService');
 const { verifyGitHubSignature, verifyGitLabToken } = require('../modules/webhookSecurity');
 const { db, uuid } = require('../db/store');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 
 /**
  * THE CI/CD PLUGIN ENDPOINT (report 3.2.4)
@@ -43,10 +43,10 @@ async function authenticateApiKey(req, res, next) {
   next();
 }
 
-router.post('/repos/:id/api-key', requireAuth, async (req, res) => {
+router.post('/repos/:id/api-key', requireAuth, requireAdmin, async (req, res) => {
   await db.read();
   const repo = db.data.repositories.find((r) => r.id === req.params.id);
-  if (!repo || (req.user.role !== 'Admin' && repo.ownerId !== req.user.sub)) {
+  if (!repo || (req.user.role?.toLowerCase() !== 'admin' && repo.ownerId !== req.user.sub)) {
     return res.status(404).json({ error: 'Repository not found or access denied' });
   }
   repo.ciApiKey = `sk_ci_${uuid().replace(/-/g, '')}`;

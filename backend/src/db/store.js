@@ -228,6 +228,13 @@ const db = {
 
 async function init() {
   await db.read();
+  if (Array.isArray(lowDb.data.users)) {
+    lowDb.data.users.forEach((u) => {
+      if (u.role && u.role.toLowerCase() === 'admin') {
+        u.role = 'admin';
+      }
+    });
+  }
   await db.write();
 
   const sb = getSupabase();

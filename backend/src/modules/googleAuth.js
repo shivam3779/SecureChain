@@ -45,8 +45,9 @@ async function fetchGoogleUser(accessToken) {
 }
 
 function issueSessionToken(googleUser) {
+  const role = (googleUser.role || 'developer').toLowerCase();
   return jwt.sign(
-    { sub: `google:${googleUser.id}`, email: googleUser.email, name: googleUser.name, picture: googleUser.picture, provider: 'google' },
+    { sub: googleUser.googleId || `google:${googleUser.id}`, email: googleUser.email, name: googleUser.name, picture: googleUser.picture || googleUser.avatar, provider: 'google', role },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
