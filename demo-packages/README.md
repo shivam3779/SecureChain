@@ -23,3 +23,4 @@ Sample manifest files for demonstrating SecureChain vulnerability scanning, typo
 2. Click **"Load Vulnerable Demo"** or upload `vulnerable-app/package.json`.
 3. Click **Scan Manifest**.
 4. Observe real-time CycloneDX SBOM generation, CVE risk scoring, and policy gate evaluation.
+

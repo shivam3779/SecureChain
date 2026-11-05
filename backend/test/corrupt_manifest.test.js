@@ -21,7 +21,6 @@ describe('Corrupt Manifest Parser & Gate Hardening Suite', () => {
     assert.equal(extracted['lodash'], '4.17.15');
     assert.equal(extracted['axios'], '^0.18.0');
     assert.equal(extracted['@angular/core'], '~12.0.0');
-    // Ensure metadata keys like name, version are excluded
     assert.equal(extracted['name'], undefined);
     assert.equal(extracted['version'], undefined);
   });
@@ -44,12 +43,10 @@ describe('Corrupt Manifest Parser & Gate Hardening Suite', () => {
     const dirty = corrupt.find(c => c.name === 'dirty-version-pkg');
     assert.ok(dirty);
     assert.equal(dirty.corruptEntry, true);
-    // Stripped version without invalid characters
     assert.equal(dirty.version, '1.2.3droptable');
   });
 
   test('corrupt manifest with vulnerable dependencies is forced to BLOCKED verdict and 0 risk score', () => {
-    // Simulated scan result of a corrupt manifest with vulnerable packages
     const scanResult = {
       manifestCorrupted: true,
       parseError: 'Unexpected end of JSON input',
